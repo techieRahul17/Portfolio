@@ -1,0 +1,61 @@
+---
+title: "SecUrVote"
+summary: "A blockchain-backed e-voting system — Spring Boot service, React client, MongoDB — built so results are transparent and ballots are tamper-evident. First place at Encender 2.0."
+date: "2025-04-08"
+kicker: "Expo winner"
+award: "1st place · Encender 2.0"
+tags: ["React", "Java", "Spring Boot", "MongoDB", "Blockchain"]
+repo: "https://github.com/techieRahul17"
+demo: ""
+featured: true
+order: 3
+---
+
+## The problem with trusting a database
+
+An election run on an ordinary database asks voters to trust the people who administer
+it. Not because those people are dishonest, but because nothing in the system can
+distinguish an honest tally from a quietly edited one. A row can be updated. A row can
+be updated *well*. The audit log is in the same database as the thing it audits.
+
+SecUrVote's goal was narrow and worth stating plainly: make tampering **detectable**,
+without pretending to make it impossible.
+
+## How it works
+
+A **React** client handles registration and casting. A **Java Spring Boot** service
+handles authentication, eligibility and the vote pipeline. **MongoDB** stores
+application state — voters, elections, candidates, session data.
+
+The ballots themselves go into a chained ledger. Each block commits to the one before
+it, so any retroactive edit changes every hash downstream of it. Tampering stops being
+a silent write and becomes a visible break in the chain.
+
+<Callout>
+  The interesting property isn't secrecy — it's that a modified record can no longer
+  pretend it was always there.
+</Callout>
+
+## The part that took the longest
+
+Separating **eligibility** from **the ballot**. Those two facts want to live in
+different places: the system must know that a given person is allowed to vote and has
+voted exactly once, while the ledger should hold a ballot that can be verified without
+being traced back to them.
+
+Collapse them into one record and you get a clean implementation with an ugly property —
+a chain that reads as a public list of who voted for whom. Keeping them apart was the
+design, and most of the work.
+
+## Result
+
+SecUrVote took **first place at Encender 2.0**. The demo that landed wasn't casting a
+vote — it was casting a vote, editing the stored record directly, and watching the
+verification fail on stage.
+
+## What I'd do differently
+
+I'd write the verifier before the writer. We built the chain and then built the tool
+that checks it, which meant our first real test of the design came late. Inverting that
+order would have surfaced the eligibility-versus-ballot tension in a day instead of a
+week.

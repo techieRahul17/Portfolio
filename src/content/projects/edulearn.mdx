@@ -1,0 +1,63 @@
+---
+title: "EduLearn"
+summary: "An AI-powered adaptive learning platform with personalised roadmaps, generated content, live coding sessions and real-time educator dashboards. First place at Prayacthon'25."
+date: "2025-09-14"
+kicker: "Hackathon winner"
+award: "1st place · Prayacthon'25"
+tags: ["React", "Vite", "FastAPI", "Tailwind CSS", "WebSockets", "WebRTC"]
+repo: "https://github.com/techieRahul17"
+demo: ""
+featured: true
+order: 2
+---
+
+## The premise
+
+Most "adaptive learning" is a quiz that branches. We wanted the harder version: a
+platform where the roadmap itself is generated for the learner, the content adjusts to
+where they actually are, and the educator can see it happening while it happens.
+
+We built it for **Prayacthon'25**, and it won first place.
+
+## What it does
+
+**Personalised learning roadmaps.** A learner states a goal and their starting point,
+and the platform generates a sequenced path rather than dropping them into a fixed
+syllabus.
+
+**Dynamic content generation.** Material is produced against the current step of the
+roadmap, so a learner who's struggling gets a different explanation instead of the same
+paragraph in a larger font.
+
+**Live coding sessions.** Learners write and run code inside the platform, so practice
+sits next to the explanation instead of in a separate tab that never gets opened.
+
+**Real-time educator dashboards.** Educators watch cohort progress live over WebSockets —
+who's stuck, who's ahead, which step is quietly failing for everyone.
+
+**Performance analytics.** The same event stream that drives the dashboard accumulates
+into per-student history, which is what makes the roadmap adaptive rather than merely
+personalised at signup.
+
+## Architecture
+
+A **React + Vite** front end talks to a **FastAPI** service. Two transports, deliberately:
+
+- **WebSockets** carry dashboard and progress events — small, frequent, one-to-many
+- **WebRTC** carries live session media directly between peers, because routing video
+  through our own server during a hackathon is a way to lose the demo
+
+<Callout>
+  Picking WebRTC for media and WebSockets for state was the single decision that made
+  the live demo survive a room full of people on the same network.
+</Callout>
+
+Framer Motion and Tailwind carried the interface. In a judged demo, the interface *is*
+the argument — a stalled spinner reads as a broken product no matter what the backend
+is doing.
+
+## What I'd revisit
+
+The generated roadmaps needed a stronger notion of prerequisites. They sequenced topics
+sensibly, but "sensible order" and "you cannot start B before A" are different
+constraints, and only one of them was actually encoded.

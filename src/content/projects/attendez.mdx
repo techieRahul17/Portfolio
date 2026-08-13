@@ -1,0 +1,76 @@
+---
+title: "AttendEz"
+summary: "A secure attendance platform with QR, one-time code and manual capture across a mobile app and a web dashboard — now being piloted in my department."
+date: "2025-10-20"
+kicker: "Campus pilot"
+award: "Piloted at SSN"
+tags: ["React Native", "React", "Java", "Spring Boot", "Agile"]
+repo: "https://github.com/techieRahul17"
+demo: ""
+featured: true
+order: 1
+---
+
+## The problem
+
+Attendance on campus is a small task repeated relentlessly. Every lecture, someone
+reads out a list or passes a sheet around, and every week that turns into manual data
+entry. The failure modes are all quiet ones: a proxy marked present, a sheet lost
+before it reaches the register, a correction nobody can trace back to a source.
+
+We wanted the capture step to take seconds, and the record to be defensible afterwards.
+
+## What we built
+
+AttendEz is two clients over one Spring Boot service:
+
+- a **React Native app** for faculty to open a session and for students to check in
+- a **React web dashboard** for staff to review sessions, correct records and export
+
+A session supports three capture modes, because no single one survives every room:
+
+1. **QR** — the faculty device displays a rotating code, students scan to mark themselves
+2. **One-time code** — a short numeric code read out loud, for when cameras fail or the
+   projector is the only screen in the room
+3. **Manual** — the fallback that always works, with every override attributed to the
+   staff member who made it
+
+<Callout>
+  The three modes aren't feature creep — they're the reason it works. A system that
+  only supports the happy path gets abandoned the first week the Wi-Fi drops.
+</Callout>
+
+## Design decisions worth defending
+
+**Codes are short-lived, not just secret.** A static QR is a screenshot away from being
+useless; it gets forwarded to whoever isn't in the room. Rotating the code on a short
+interval means a shared screenshot is stale before it's useful, and the check-in window
+stays bounded to the actual class.
+
+**Overrides are records, not edits.** Manual marking doesn't quietly overwrite a value —
+it writes a new attributed entry. When a student disputes an absence weeks later, the
+answer is in the history rather than in someone's memory.
+
+**The dashboard is read-heavy by design.** Faculty spend most of their time looking, not
+editing, so the web client optimises for scanning a session at a glance and drilling in
+only when something looks wrong.
+
+## How we worked
+
+The team ran this on Agile and SCRUM — real sprints, real standups, a real backlog we
+groomed instead of a chat thread we scrolled. It mattered more than it sounds like it
+should: with two client apps and a shared backend, the thing most likely to break the
+project was three people quietly assuming three different contracts.
+
+## Where it stands
+
+AttendEz is being **piloted in my department** — which has been the most useful part of
+the whole project. Real users find the edge cases you never write a ticket for: the
+lecture hall with no signal, the student whose phone died, the class that starts before
+the faculty device has finished loading.
+
+## What I'd do differently
+
+I'd design the offline path first rather than adapt to it. Everything hard about this
+project traced back to intermittent connectivity, and treating that as the normal case
+from day one would have produced a cleaner sync model than the one we retrofitted.

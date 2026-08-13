@@ -1,0 +1,91 @@
+import type { SkillGroup } from "@/types";
+
+export const skills: SkillGroup[] = [
+  {
+    title: "Languages",
+    note: "What I think in",
+    items: ["Python", "Java", "C", "C++", "JavaScript", "TypeScript"],
+  },
+  {
+    title: "Web & Mobile",
+    note: "What I ship",
+    items: [
+      "ReactJS",
+      "React Native",
+      "Next.js",
+      "Node.js",
+      "ExpressJS",
+      "Spring Boot",
+      "FastAPI",
+      "Tailwind CSS",
+      "HTML",
+      "CSS",
+      "WebSockets",
+      "WebRTC",
+    ],
+  },
+  {
+    title: "Cloud & AI",
+    note: "Where it runs",
+    items: [
+      "AWS Lambda",
+      "AWS Bedrock",
+      "Bedrock Knowledge Base",
+      "API Gateway",
+      "AWS S3",
+      "CloudWatch",
+      "IAM",
+      "MCP",
+      "GenAI",
+      "Cloudflare",
+      "OVH Cloud",
+      "VPS",
+    ],
+  },
+  {
+    title: "Data",
+    note: "Where it lives",
+    items: ["MySQL", "MongoDB", "OracleSQL", "DynamoDB"],
+  },
+  {
+    title: "Tools",
+    note: "Day to day",
+    items: [
+      "Git",
+      "Postman",
+      "VS Code",
+      "IntelliJ",
+      "Android Studio",
+      "PyCharm",
+      "WebStorm",
+      "Eclipse",
+      "CLion",
+      "Anaconda",
+      "GitFarm",
+    ],
+  },
+  {
+    title: "Deploy",
+    note: "How it goes live",
+    items: ["Vercel", "Render", "Netlify", "Docker-ready CI"],
+  },
+];
+
+/** Flat keyword list for the hero marquee. */
+export const marqueeWords = [
+  "React",
+  "Java",
+  "Spring Boot",
+  "AWS Bedrock",
+  "MCP",
+  "Next.js",
+  "Python",
+  "FastAPI",
+  "DynamoDB",
+  "React Native",
+  "TypeScript",
+  "WebRTC",
+  "MongoDB",
+  "AWS Lambda",
+  "GenAI",
+];
