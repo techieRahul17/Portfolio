@@ -28,7 +28,7 @@ export const profile = {
   availableForWork: true,
   availabilityNote: "Open to SDE roles & internships",
   resumeUrl: "/resume/Rahul_V_S_Resume.pdf",
-  avatar: "/images/avatar.jpg",
+  avatar: "/images/Rahl.jpg",
   university: "SSN College of Engineering",
   degree: "B.E. Computer Science and Engineering",
   gradYear: "2027",
