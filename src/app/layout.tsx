@@ -7,6 +7,7 @@ import { Animator } from "@/components/motion/Animator";
 import { Preloader } from "@/components/motion/Preloader";
 import { Cursor } from "@/components/motion/Cursor";
 import { ScrollProgress } from "@/components/motion/ScrollProgress";
+import { PageTransition } from "@/components/motion/PageTransition";
 import { buildMetadata } from "@/lib/seo";
 import { SITE_URL } from "@/lib/constants";
 import "./globals.css";
@@ -55,7 +56,14 @@ const bootScript = `
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${display.variable} ${sans.variable} ${mono.variable} ${serif.variable}`}>
+    <html
+      lang="en"
+      // The boot script below writes `js` (and sometimes `visited`) onto this
+      // element before React hydrates, which React would otherwise report as a
+      // mismatch. The classes are deliberate, so tell it not to worry.
+      suppressHydrationWarning
+      className={`${display.variable} ${sans.variable} ${mono.variable} ${serif.variable}`}
+    >
       <head>
         <script dangerouslySetInnerHTML={{ __html: bootScript }} />
       </head>
@@ -69,6 +77,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
         <MotionProvider>
           <Preloader />
+          <PageTransition />
           <Cursor />
           <ScrollProgress />
           <Animator />

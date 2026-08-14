@@ -6,7 +6,7 @@ export const achievements: Achievement[] = [
     title: "Winner — InnovateX'25 Hackathon",
     project: "InterVueX",
     year: "2025",
-    detail: "First place for an AI-driven interview preparation platform.",
+    detail: "First place for an AI-powered technical hiring platform with rubric scoring.",
   },
   {
     title: "Winner — Encender 2.0 Project Expo",

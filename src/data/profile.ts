@@ -28,7 +28,9 @@ export const profile = {
   availableForWork: true,
   availabilityNote: "Open to SDE roles & internships",
   resumeUrl: "/resume/Rahul_V_S_Resume.pdf",
-  avatar: "/images/Rahl.jpg",
+  /* Lowercase filename on purpose: Vercel's filesystem is case-sensitive, so
+     `Rahl.JPG` referenced as `.jpg` builds locally and 404s in production. */
+  avatar: "/images/rahul.jpg",
   university: "SSN College of Engineering",
   degree: "B.E. Computer Science and Engineering",
   gradYear: "2027",

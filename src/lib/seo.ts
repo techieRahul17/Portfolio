@@ -29,12 +29,12 @@ export function buildMetadata({
   const url = `${SITE_URL}${path}`;
   const fullTitle = title ? `${title} — ${profile.name}` : `${profile.name} — ${profile.role}`;
 
-  // No explicit image? Generate one on the fly from the page title.
-  const ogImage =
-    image ??
-    `/api/og?title=${encodeURIComponent(title ?? profile.name)}&subtitle=${encodeURIComponent(
-      title ? profile.role : profile.role,
-    )}`;
+  /* When a page has its own artwork we point at it. Otherwise we say nothing
+     about images and let `app/opengraph-image.tsx` supply the site card —
+     Next injects those tags itself, and overriding here would suppress it. */
+  const images = image
+    ? [{ url: `${SITE_URL}${image}`, width: 1200, height: 630, alt: fullTitle }]
+    : undefined;
 
   return {
     title: fullTitle,
@@ -59,7 +59,7 @@ export function buildMetadata({
       siteName: profile.name,
       locale: "en_IN",
       type,
-      images: [{ url: `${SITE_URL}${ogImage}`, width: 1200, height: 630, alt: fullTitle }],
+      ...(images ? { images } : {}),
       ...(publishedTime ? { publishedTime } : {}),
       ...(tags ? { tags } : {}),
     },
@@ -67,7 +67,7 @@ export function buildMetadata({
       card: "summary_large_image",
       title: fullTitle,
       description,
-      images: [`${SITE_URL}${ogImage}`],
+      ...(image ? { images: [`${SITE_URL}${image}`] } : {}),
     },
   };
 }

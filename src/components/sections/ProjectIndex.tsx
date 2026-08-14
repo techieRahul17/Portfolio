@@ -97,28 +97,41 @@ export function ProjectIndex({ projects }: { projects: Project[] }) {
               className="bg-accent absolute inset-0 origin-left scale-x-0 transition-transform duration-600 ease-[cubic-bezier(0.76,0,0.24,1)] group-hover:scale-x-100"
             />
 
-            <div className="relative flex flex-col gap-4 px-1 py-8 sm:flex-row sm:items-center sm:gap-8 sm:px-4">
-              <span className="text-faint group-hover:text-accent-ink w-10 shrink-0 font-mono text-[0.7rem] tracking-[0.2em] transition-colors duration-500">
+            <div className="relative flex gap-5 px-1 py-9 sm:gap-8 sm:px-4">
+              <span className="text-faint group-hover:text-accent-ink mt-2 w-8 shrink-0 font-mono text-[0.7rem] tracking-[0.2em] transition-colors duration-500 sm:w-10">
                 {String(i + 1).padStart(2, "0")}
               </span>
 
-              <h2 className="font-display flex-1 text-[clamp(1.6rem,4.5vw,3rem)] leading-none tracking-[-0.03em] transition-transform duration-500 group-hover:translate-x-3">
-                {project.title}
-              </h2>
+              <div className="min-w-0 flex-1 transition-transform duration-500 group-hover:translate-x-3">
+                <div className="flex flex-wrap items-baseline gap-x-5 gap-y-2">
+                  <h2 className="font-display text-[clamp(1.6rem,4.5vw,3rem)] leading-none tracking-[-0.03em]">
+                    {project.title}
+                  </h2>
+                  {project.award && (
+                    <span className="border-accent/40 text-accent group-hover:border-accent-ink/30 group-hover:text-accent-ink rounded-full border px-3 py-1 font-mono text-[0.62rem] tracking-[0.1em] transition-colors duration-500">
+                      {project.award}
+                    </span>
+                  )}
+                </div>
 
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 sm:max-w-sm sm:justify-end">
-                <p className="text-muted group-hover:text-accent-ink/80 font-mono text-[0.68rem] tracking-[0.12em] transition-colors duration-500">
-                  {project.tags?.slice(0, 3).join(" · ")}
+                <p className="text-muted group-hover:text-accent-ink/80 mt-4 max-w-2xl leading-relaxed transition-colors duration-500">
+                  {project.summary}
                 </p>
-                <time
-                  dateTime={project.date}
-                  className="text-faint group-hover:text-accent-ink/70 font-mono text-[0.68rem] tracking-[0.12em] transition-colors duration-500"
-                >
-                  {formatDate(project.date).split(" ").slice(-1)}
-                </time>
+
+                <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <p className="text-faint group-hover:text-accent-ink/70 font-mono text-[0.66rem] tracking-[0.14em] uppercase transition-colors duration-500">
+                    {project.tags?.slice(0, 5).join(" · ")}
+                  </p>
+                  <time
+                    dateTime={project.date}
+                    className="text-faint group-hover:text-accent-ink/60 font-mono text-[0.66rem] tracking-[0.14em] transition-colors duration-500"
+                  >
+                    {formatDate(project.date).split(" ").slice(-1)}
+                  </time>
+                </div>
               </div>
 
-              <ArrowUpRight className="h-5 w-5 shrink-0 transition-transform duration-500 group-hover:translate-x-1 group-hover:-translate-y-1" />
+              <ArrowUpRight className="mt-2 h-5 w-5 shrink-0 transition-transform duration-500 group-hover:translate-x-1 group-hover:-translate-y-1" />
             </div>
           </Link>
         ))}

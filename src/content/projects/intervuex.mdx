@@ -1,38 +1,101 @@
 ---
 title: "InterVueX"
-summary: "The project my team took to InnovateX'25 — and won. A full case study is in progress."
+summary: "A smart hiring platform that runs the whole technical interview — AI question generation from the candidate's résumé, live speech sentiment analysis, rubric scoring and video rooms with anti-cheating. First place at InnovateX'25."
 date: "2025-03-02"
 kicker: "Hackathon winner"
 award: "1st place · InnovateX'25"
-tags: ["Hackathon", "Full-stack"]
+tags: ["React", "Node.js", "Express", "Python", "MongoDB", "WebRTC", "Tailwind CSS"]
 repo: "https://github.com/techieRahul17"
 demo: ""
 featured: true
 order: 4
 ---
 
+## The problem
+
+Technical interviews are expensive on both sides of the table. The company spends senior
+engineering hours on them; the candidate spends the whole thing being assessed by
+whoever happened to be free that afternoon, against a bar that moves between
+interviewers. Two candidates can give the same answer and walk away with different
+scores, and nobody in the room can tell you why.
+
+We wanted to attack both halves at once: make interviews cheaper to run, and make them
+**consistent enough to defend**.
+
+## What we built
+
+InterVueX runs the interview end to end.
+
+**Résumé-aware question generation.** Questions are generated from the candidate's own
+résumé and then adapted live off their answers — so the interview follows the person in
+front of you instead of a static list someone wrote last quarter.
+
+**Live speech sentiment analysis.** Candidate speech is analysed during the interview,
+giving the interviewer a read on how the conversation is actually going rather than a
+guess reconstructed from memory afterwards.
+
+**Rubric-based evaluation.** Every answer is scored against a defined rubric. This is
+the part that makes the whole thing fair: the same response gets the same score whoever
+is running the session.
+
+**Practice mode.** Candidates can run interviews against the AI on their own and get
+feedback — the same engine, pointed at preparation instead of assessment.
+
+**Live video rooms.** Real-time video and audio over WebRTC, with running transcripts
+and anti-cheating measures built into the session.
+
+**Interview reports.** Everything above collapses into one report per candidate: the
+transcript, the rubric scores, the sentiment read, and where the answers actually landed.
+
 <Callout>
-  **Rahul — this one is yours to finish.** Everything on this site is drawn from your
-  résumé, and the résumé lists InterVueX as your InnovateX'25 winner without describing
-  what it does. Rather than invent details, this page is deliberately short. Replace the
-  sections below and it'll match the other case studies.
+  The rubric is the load-bearing feature. AI-generated questions are a nice demo; scoring
+  those answers the same way every single time is what makes the output usable as a
+  hiring decision.
 </Callout>
 
-## The win
+## Architecture
 
-**InterVueX** took first place at the **InnovateX'25 hackathon**.
+- **Frontend** — React with Tailwind CSS
+- **Backend** — Node.js and Express
+- **AI / NLP** — Python services for question generation and sentiment analysis
+- **Database** — MongoDB
+- **Real-time** — WebRTC for video and audio
 
-## To fill in
+Splitting the AI work into Python services rather than forcing it into the Node process
+was deliberate: the NLP tooling lives in Python, and pretending otherwise would have
+cost us the entire hackathon in glue code.
 
-A few prompts, in the shape the other case studies use — they're what interviewers
-actually ask about:
+## What I worked on
 
-- **The problem.** What was broken or missing that made this worth a weekend?
-- **What you built.** The two or three capabilities that mattered, in plain language.
-- **The architecture.** Which pieces, and — more usefully — why those pieces.
-- **The decision you'd defend.** The trade-off you made knowingly, and what it cost.
-- **What you'd do differently.** The most convincing section on any project page.
+I built the **responsive frontend** and owned the seam between it and the backend — which
+on a real-time product is most of the difficulty. Specifically:
 
-Edit `src/content/projects/intervuex.mdx` to replace this. The frontmatter at the top
-controls the title, tags and the award badge; `featured: true` keeps it on the home page
-deck, and `order` decides where it sits.
+- the interview interface, and making it hold up during a live session
+- frontend-to-backend integration for real-time interviews
+- wiring in **live transcripts and speech sentiment analysis**, so the interviewer sees
+  the read as the answer happens rather than after it
+- the **video meeting features and anti-cheating logic**
+
+The hard part was never a single feature. It was that video, transcript, sentiment and
+scoring all had to stay in sync in one interface while a real person was mid-sentence.
+Any one of them lagging makes the whole product feel broken.
+
+## Result
+
+InterVueX took **first place at the InnovateX Hackathon 2025**, judged on being
+impactful, scalable and genuinely usable — a hiring tool that saves companies time while
+making the experience better for the person being interviewed.
+
+## What we learned
+
+That AI is at its most useful here not as the thing that decides, but as the thing that
+makes the decision *consistent*: generating the right question, capturing what was
+actually said, and scoring it the same way every time. The interviewer still decides —
+they just decide with better evidence, and the candidate gets a fairer, less stressful
+hour.
+
+## What I'd do differently
+
+I'd put more design effort into how the rubric scores are surfaced during the interview.
+We nailed capturing them; presenting them live without biasing the interviewer mid-answer
+is a genuinely hard interface problem, and we solved it late.
