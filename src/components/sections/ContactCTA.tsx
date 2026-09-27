@@ -6,7 +6,7 @@ import { Magnetic } from "@/components/motion/Magnetic";
 import { ButtonLink } from "@/components/ui/Button";
 import { CopyEmail } from "@/components/ui/CopyEmail";
 
-const CHANT = ["Let's work together", "Open to SDE roles", "Say hello"];
+const CHANT = ["Let's work together", "Open to frontend roles", "Say hello"];
 
 export function ContactCTA() {
   return (
@@ -26,7 +26,7 @@ export function ContactCTA() {
           items={CHANT}
           speed={55}
           className="font-display text-[clamp(2rem,7vw,5.5rem)] leading-none tracking-[-0.04em]"
-          separator="✦"
+          separator="/"
         />
       </div>
 
@@ -48,7 +48,7 @@ export function ContactCTA() {
 
             <p data-reveal className="text-muted mt-7 max-w-lg text-lg leading-relaxed">
               I&apos;m {profile.availableForWork ? "open to " : "always up for a chat about "}
-              software engineering roles and internships — and I answer every message that
+              frontend and software engineering roles — and I answer every message that
               isn&apos;t a template.
             </p>
 

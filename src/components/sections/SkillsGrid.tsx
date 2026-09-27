@@ -2,6 +2,10 @@ import { skills } from "@/data/skills";
 import { Container } from "@/components/ui/Container";
 import { SectionHeading } from "@/components/ui/SectionHeading";
 import { Spotlight } from "@/components/motion/Spotlight";
+import { SkillGlobe } from "@/components/three/SkillGlobe";
+
+/** Every skill once, for the globe — the grouped list below stays the full record. */
+const globeItems = [...new Set(skills.flatMap((g) => g.items))];
 
 /**
  * The toolkit, grouped rather than dumped. A sticky heading holds the left
@@ -26,6 +30,12 @@ export function SkillsGrid() {
                 }
                 lead="Honest list. Everything here has shipped something I'd be happy to walk through line by line."
               />
+              <div data-reveal className="mx-auto mt-8 max-w-[19rem] lg:mx-0">
+                <SkillGlobe items={globeItems} />
+                <p className="text-faint mt-2 text-center font-mono text-[0.6rem] tracking-[0.25em] uppercase">
+                  Drag to spin
+                </p>
+              </div>
             </div>
           </div>
 

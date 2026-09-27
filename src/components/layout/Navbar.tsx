@@ -104,7 +104,7 @@ export function Navbar() {
 
         <div className="relative mx-auto flex h-full max-w-[110rem] items-center justify-between gap-4 px-5 sm:px-8">
           <Link
-            href="/"
+            href="/portfolio"
             className="group flex items-center gap-2.5"
             aria-label={`${profile.name} — home`}
           >

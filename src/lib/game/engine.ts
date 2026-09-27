@@ -1,0 +1,1086 @@
+import * as THREE from "three";
+import { gsap } from "gsap";
+import { Character, type Kit } from "./avatar";
+import { createAudio } from "./audio";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
+import { Confetti, Dust, Trails, chargeRing } from "./effects";
+import { ABOUT, CONTACT, EXPERIENCE, GOAL, PINS, SKILLS, SPAWN, TROPHIES, WORK, ZONE_ANCHORS } from "./layout";
+import { Pins } from "./pins";
+import { Ball, circle, penetration, type Collider } from "./physics";
+import { footballTexture, toonRamp } from "./textures";
+import { buildWorld } from "./world";
+
+export type ZoneDef = { id: string; name: string; task: string; ids: string[] };
+
+export type GameConfig = {
+  zones: ZoneDef[];
+  gateLabels: string[];
+  projects: { id: string; title: string }[];
+  skills: { id: string; title: string }[];
+  unlocked: string[];
+  touch: boolean;
+  onReady: () => void;
+  onProgress?: (progress: number, label: string) => void;
+  onReveal: (id: string, fresh: boolean) => void;
+  onEvent: (event: GameEvent) => void;
+};
+
+/** Moments the HUD reacts to: banners, the scoreboard, notifications. */
+export type GameEvent =
+  | { type: "goal"; zone: "about" | "trophies" }
+  | { type: "save" }
+  | { type: "bullseye" }
+  | { type: "unlock"; id: string; fresh: boolean }
+  | { type: "strike" };
+
+/** Live state the HUD polls each frame (minimap, prompts, mission tracker). */
+export type Snapshot = {
+  x: number;
+  z: number;
+  yaw: number;
+  /** 0..1 while a shot is charging, otherwise 0. */
+  charge: number;
+  /** A ball is within kicking reach. */
+  near: boolean;
+  /** Zone the player is standing in, if any. */
+  zone: string | null;
+  /** First zone with something still locked. */
+  next: string | null;
+  nextDist: number;
+  playTime: number;
+  keeperZ: number;
+  balls: { x: number; z: number }[];
+  started: boolean;
+  paused: boolean;
+};
+
+export type Game = ReturnType<typeof createGame>;
+
+const PLAYER_KIT: Kit = {
+  skin: "#8f5c3e",
+  skinShade: "#7b4b31",
+  hair: "#15100e",
+  hairFade: "#1e1613",
+  style: "quiff",
+  shirt: "#6e5bff",
+  trim: "#e8ff4f",
+  shorts: "#101018",
+  socks: "#e8ff4f",
+  boots: "#f4f4f6",
+  beard: true,
+  back: { name: "RAHUL", number: "17" },
+};
+
+const KEEPER_KIT: Kit = {
+  style: "crop",
+  skin: "#c98f68",
+  skinShade: "#b27a55",
+  hair: "#3a2a1c",
+  shirt: "#ff5c3d",
+  trim: "#101018",
+  shorts: "#101018",
+  socks: "#ff5c3d",
+  boots: "#101018",
+  gloves: "#e8ff4f",
+};
+
+const PLAYER_R = 0.42;
+const WALK = 6.4;
+const SPRINT = 10;
+
+const damp = (a: number, b: number, rate: number, dt: number) => a + (b - a) * (1 - Math.exp(-rate * dt));
+const angleDelta = (a: number, b: number) => Math.atan2(Math.sin(b - a), Math.cos(b - a));
+
+export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
+  const touch = config.touch;
+  const lowPower = touch || (navigator.hardwareConcurrency ?? 8) <= 4;
+
+  /* =============================================================== renderer */
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: !lowPower, powerPreference: "high-performance" });
+  let dpr = Math.min(window.devicePixelRatio || 1, lowPower ? 1.5 : 1.75);
+  renderer.setPixelRatio(dpr);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.5, 600);
+
+  // Bloom on the bright stuff only: floodlights, LED boards, beacons, trails.
+  // Post-processing renders off-screen, where the canvas's own MSAA doesn't
+  // apply, so edges are smoothed by an SMAA pass at the end instead. (A
+  // multisampled half-float target would be neater, but some Direct3D drivers
+  // render it solid black.)
+  let composer: EffectComposer | null = lowPower ? null : new EffectComposer(renderer);
+  if (composer) {
+    composer.addPass(new RenderPass(scene, camera));
+    composer.addPass(new UnrealBloomPass(new THREE.Vector2(512, 512), 0.55, 0.5, 0.86));
+    composer.addPass(new OutputPass());
+    composer.addPass(new SMAAPass());
+  }
+
+  /**
+   * Safety net: if post-processing ever produces a black frame on some GPU,
+   * drop it and render directly. Checked on the first frames only — the sky
+   * and the pitch are never pure black, so all-zero pixels mean it failed.
+   */
+  let composerChecks = 3;
+  function composerLooksBroken() {
+    const gl = renderer.getContext();
+    const w = gl.drawingBufferWidth;
+    const h = gl.drawingBufferHeight;
+    const px = new Uint8Array(4);
+    let lit = 0;
+    for (const [fx, fy] of [
+      [0.5, 0.5],
+      [0.25, 0.3],
+      [0.75, 0.3],
+      [0.5, 0.85],
+      [0.2, 0.8],
+    ]) {
+      gl.readPixels(Math.floor(w * fx), Math.floor(h * fy), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      if (px[0] + px[1] + px[2] > 6) lit++;
+    }
+    return lit === 0;
+  }
+  function dropComposer() {
+    composer?.dispose();
+    composer = null;
+  }
+
+  // A lost context (driver reset, GPU memory pressure) would otherwise leave a
+  // black canvas behind a working HUD. Keep it recoverable, and come back
+  // without post-processing, the likeliest culprit.
+  const onContextLost = (e: Event) => e.preventDefault();
+  const onContextRestored = () => {
+    dropComposer();
+    resize();
+  };
+  canvas.addEventListener("webglcontextlost", onContextLost);
+  canvas.addEventListener("webglcontextrestored", onContextRestored);
+  const ramp = toonRamp();
+  const audio = createAudio();
+
+  config.onProgress?.(0.7, "Filling the stands");
+  const world = buildWorld(scene, {
+    ramp,
+    anisotropy: renderer.capabilities.getMaxAnisotropy(),
+    lowPower,
+    touch,
+    gateLabels: config.gateLabels,
+    projects: config.projects,
+    skills: config.skills,
+  });
+
+  const unlocked = new Set(config.unlocked);
+  const zoneById = new Map(config.zones.map((z) => [z.id, z]));
+  const idsOf = (zone: string) => zoneById.get(zone)?.ids ?? [];
+
+  /* ================================================================ player */
+  const player = new Character(PLAYER_KIT);
+  scene.add(player.root);
+  const pos = new THREE.Vector3(SPAWN.x, 0, SPAWN.z);
+  const vel = new THREE.Vector3();
+  let yaw = Math.PI; // facing north
+  player.root.position.copy(pos);
+  player.root.rotation.y = yaw;
+
+  const ring = chargeRing();
+  scene.add(ring.mesh);
+  const dust = new Dust();
+  const confetti = new Confetti(lowPower ? 260 : 420);
+  scene.add(dust.group, confetti.mesh);
+
+  /* ================================================================ keeper */
+  const keeper = new Character(KEEPER_KIT);
+  keeper.root.rotation.y = -Math.PI / 2;
+  keeper.root.position.set(TROPHIES.keeperX, 0, 0);
+  scene.add(keeper.root);
+  const keeperCol = circle(TROPHIES.keeperX, 0, 0.5, 2.3, { bounce: 0.65, player: true }) as Extract<
+    Collider,
+    { kind: "circle" }
+  >;
+  let keeperZ = 0;
+  let keeperDived = false;
+
+  const colliders: Collider[] = [...world.colliders, keeperCol];
+  const pins = new Pins(scene, ramp, colliders, PINS.x, PINS.z);
+
+  /* ================================================================= balls */
+  const ballMat = new THREE.MeshToonMaterial({ map: footballTexture(), gradientMap: ramp });
+  const bounceSound = (s: number) => audio.bounce(s);
+  const balls = [
+    new Ball("free", 1.3, 8.9, ballMat, { onBounce: bounceSound }),
+    new Ball("about", ABOUT.ball.x, ABOUT.ball.z, ballMat, { onBounce: bounceSound }),
+    new Ball("experience", EXPERIENCE.ball.x, EXPERIENCE.ball.z, ballMat, { onBounce: bounceSound }),
+    new Ball("work", WORK.ball.x, WORK.ball.z, ballMat, { onBounce: bounceSound }),
+    new Ball("trophies", TROPHIES.ball.x, TROPHIES.ball.z, ballMat, { onBounce: bounceSound }),
+  ];
+  balls.forEach((b) => scene.add(b.mesh));
+  const trails = new Trails(balls.length);
+  trails.points.renderOrder = 6;
+  scene.add(trails.points);
+  const prevX = new Map(balls.map((b) => [b, b.pos.x]));
+  const prevVX = new Map(balls.map((b) => [b, 0]));
+
+  /* ============================================================ guidance */
+  const zoneRings = new Map(
+    config.zones.map((z) => {
+      const a = ZONE_ANCHORS[z.id];
+      return [z.id, world.zoneRing(a.x, a.z, z.id === "contact" ? CONTACT.padR + 0.5 : 2.3)];
+    }),
+  );
+
+  const beacon = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.9, 0.9, 40, 24, 1, true),
+    new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      uniforms: { uTime: world.uniforms.uTime, uAlpha: { value: 1 } },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: /* glsl */ `
+        uniform float uTime; uniform float uAlpha; varying vec2 vUv;
+        void main() {
+          float fade = pow(1.0 - vUv.y, 1.6);
+          float bands = 0.75 + 0.25 * sin(vUv.y * 60.0 - uTime * 6.0);
+          gl_FragColor = vec4(vec3(0.91, 1.0, 0.31), fade * bands * 0.45 * uAlpha);
+        }`,
+    }),
+  );
+  beacon.position.y = 20;
+  beacon.renderOrder = 5;
+  scene.add(beacon);
+
+  const arrowShape = new THREE.Shape();
+  arrowShape.moveTo(0, 0.55);
+  arrowShape.lineTo(0.42, 0);
+  arrowShape.lineTo(0.15, 0);
+  arrowShape.lineTo(0.15, -0.45);
+  arrowShape.lineTo(-0.15, -0.45);
+  arrowShape.lineTo(-0.15, 0);
+  arrowShape.lineTo(-0.42, 0);
+  arrowShape.closePath();
+  const arrow = new THREE.Mesh(
+    new THREE.ShapeGeometry(arrowShape),
+    new THREE.MeshBasicMaterial({ color: "#e8ff4f", transparent: true, opacity: 0, depthWrite: false }),
+  );
+  arrow.rotation.order = "YXZ";
+  arrow.renderOrder = 3;
+  scene.add(arrow);
+
+  /* ====================================================== restore progress */
+  const syncProps = () => {
+    world.targets.forEach((t, i) => unlocked.has(t.id) && world.markTarget(t, i));
+    world.gates.forEach((g, i) => {
+      const id = idsOf("experience")[i];
+      if (id && unlocked.has(id)) markGate(i);
+    });
+    world.orbs.forEach((o) => {
+      if (unlocked.has(o.id) && !o.taken) {
+        o.taken = true;
+        o.group.visible = false;
+      }
+    });
+  };
+  const markGate = (i: number) => {
+    const g = world.gates[i];
+    if (!g || g.done) return;
+    g.done = true;
+    const m = g.strip.material as THREE.MeshBasicMaterial;
+    m.color.set("#e8ff4f");
+    m.opacity = 0.95;
+  };
+  syncProps();
+
+  /* ================================================================= input */
+  const keys = new Set<string>();
+  const joy = { x: 0, y: 0 };
+  let kickHeld = false;
+  let paused = true;
+  let started = false;
+
+  const GAME_KEYS = new Set([
+    "KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+    "Space", "ShiftLeft", "ShiftRight", "KeyR",
+  ]);
+  const onKeyDown = (e: KeyboardEvent) => {
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+    if (!GAME_KEYS.has(e.code) || paused) return;
+    e.preventDefault();
+    if (e.code === "KeyR" && !e.repeat) resetNearestBall();
+    keys.add(e.code);
+    if (e.code === "Space") kickHeld = true;
+  };
+  const onKeyUp = (e: KeyboardEvent) => {
+    keys.delete(e.code);
+    if (e.code === "Space") kickHeld = false;
+  };
+  const onBlur = () => {
+    keys.clear();
+    kickHeld = false;
+  };
+  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
+  window.addEventListener("blur", onBlur);
+
+  let zoom = 1;
+  const onWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    zoom = THREE.MathUtils.clamp(zoom + Math.sign(e.deltaY) * 0.08, 0.7, 1.45);
+  };
+  canvas.addEventListener("wheel", onWheel, { passive: false });
+
+  function inputVector() {
+    if (paused) return { x: 0, z: 0, sprint: false };
+    let x = joy.x;
+    let z = joy.y;
+    if (keys.has("KeyA") || keys.has("ArrowLeft")) x -= 1;
+    if (keys.has("KeyD") || keys.has("ArrowRight")) x += 1;
+    if (keys.has("KeyW") || keys.has("ArrowUp")) z -= 1;
+    if (keys.has("KeyS") || keys.has("ArrowDown")) z += 1;
+    const len = Math.hypot(x, z);
+    if (len > 1) {
+      x /= len;
+      z /= len;
+    }
+    // Joystick pushed to the rim sprints on touch.
+    const sprint = keys.has("ShiftLeft") || keys.has("ShiftRight") || Math.hypot(joy.x, joy.y) > 0.92;
+    return { x, z, sprint };
+  }
+
+  /* ================================================================ reveal */
+  let celebrateCam = 0;
+  function reveal(id: string, at?: THREE.Vector3) {
+    const fresh = !unlocked.has(id);
+    unlocked.add(id);
+    config.onEvent({ type: "unlock", id, fresh });
+    player.play("celebrate");
+    if (at) confetti.burst(at.x, at.y + 0.5, at.z, fresh ? 170 : 60);
+    if (fresh) {
+      audio.unlockChime();
+      audio.cheer(true);
+      world.uniforms.uCheer.value = 1;
+      cheerHold = 1;
+    }
+    celebrateCam = 1;
+    // Let the celebration land before the panel slides in.
+    pendingReveals.push({ id, fresh, t: fresh ? 1.45 : 0.35 });
+  }
+
+  /* All timing runs on the simulation clock (not wall-clock tweens), so the
+     game pauses cleanly and can be stepped deterministically. */
+  const pendingReveals: { id: string; fresh: boolean; t: number }[] = [];
+  let cheerHold = 0;
+  let strikeIn = -1;
+  let strikePower = 0;
+  let introT = -1;
+
+  function tickTimers(dt: number) {
+    for (let i = pendingReveals.length - 1; i >= 0; i--) {
+      const r = pendingReveals[i];
+      r.t -= dt;
+      if (r.t > 0) continue;
+      pendingReveals.splice(i, 1);
+      paused = true;
+      keys.clear();
+      kickHeld = false;
+      config.onReveal(r.id, r.fresh);
+    }
+
+    if (cheerHold > 0) cheerHold -= dt;
+    else world.uniforms.uCheer.value *= Math.exp(-1.3 * dt);
+
+    if (strikeIn > 0) {
+      strikeIn -= dt;
+      if (strikeIn <= 0) strike(strikePower);
+    }
+
+    if (introT >= 0) {
+      introT += dt;
+      const p = Math.min(introT / 2.4, 1);
+      camBlend = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+      if (p >= 1) {
+        introT = -1;
+        paused = false;
+      }
+    }
+  }
+
+  /** Slow motion for a beat after a goal: seconds of real time left. */
+  let slowMo = 0;
+
+  /* ================================================================== kick */
+  let charge = 0;
+  let wasHeld = false;
+  let kickCooldown = 0;
+  const facing = new THREE.Vector3();
+
+  function aim(ball: Ball, power: number) {
+    facing.set(Math.sin(yaw), 0, Math.cos(yaw));
+    type Cand = { x: number; y: number; z: number; pri: number };
+    const cands: Cand[] = [];
+    const hw = GOAL.halfWidth;
+    // Aim at the post the keeper is furthest from.
+    const far = keeperZ > 0 ? -1 : 1;
+    cands.push({ x: GOAL.lineX + 0.8, y: 0.9, z: far * (hw - 0.85), pri: 0 });
+    cands.push({ x: -GOAL.lineX - 0.8, y: 1.0, z: (Math.random() - 0.5) * (hw - 1), pri: 0 });
+    const face = WORK.wall.z + WORK.wall.depth / 2;
+    world.targets.forEach((t) => cands.push({ x: t.x, y: t.y, z: face, pri: t.done ? 1 : 0 }));
+
+    let best: Cand | null = null;
+    let bestScore = Infinity;
+    for (const c of cands) {
+      const dx = c.x - ball.pos.x;
+      const dz = c.z - ball.pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 2 || d > 32) continue;
+      const ang = Math.acos(THREE.MathUtils.clamp((dx * facing.x + dz * facing.z) / d, -1, 1));
+      if (ang > 0.46) continue;
+      const score = ang + c.pri * 0.2;
+      if (score < bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    }
+
+    if (!best) {
+      const s = 9 + 17 * power;
+      return { vx: facing.x * s, vy: 1 + 5.5 * power * power, vz: facing.z * s };
+    }
+    const dx = best.x - ball.pos.x;
+    const dz = best.z - ball.pos.z;
+    const d = Math.hypot(dx, dz);
+    const s = 14 + 12 * power;
+    const T = d / s;
+    const vy = Math.min(13, (best.y - ball.r + 0.5 * 20 * T * T) / T);
+    return { vx: (dx / d) * s, vy, vz: (dz / d) * s };
+  }
+
+  function strike(power: number) {
+    facing.set(Math.sin(yaw), 0, Math.cos(yaw));
+    const footX = pos.x + facing.x * 0.55;
+    const footZ = pos.z + facing.z * 0.55;
+    // Reach: anything close to the boot, or a little further out if it's in
+    // front of you — a dribbled ball runs a stride ahead.
+    let target: Ball | null = null;
+    let bestD = Infinity;
+    for (const b of balls) {
+      if (b.pos.y > 1.3 || b.resetIn > 0) continue;
+      const dx = b.pos.x - pos.x;
+      const dz = b.pos.z - pos.z;
+      const d = Math.hypot(dx, dz);
+      const ahead = d > 1e-3 ? (dx * facing.x + dz * facing.z) / d : 1;
+      const inReach = Math.hypot(b.pos.x - footX, b.pos.z - footZ) < 1.4 || (d < 2.5 && ahead > 0.4);
+      if (inReach && d < bestD) {
+        bestD = d;
+        target = b;
+      }
+    }
+    if (!target) {
+      dust.emit(footX, footZ, 3);
+      return;
+    }
+    const v = aim(target, power);
+    target.vel.set(v.vx, v.vy, v.vz);
+    target.cooldown = 0;
+    audio.kick(power);
+    dust.emit(target.pos.x, target.pos.z, 6);
+    shake = 0.12 + power * 0.25;
+  }
+
+  function resetNearestBall() {
+    let best: Ball | null = null;
+    let bestD = Infinity;
+    for (const b of balls) {
+      const d = Math.hypot(b.home.x - pos.x, b.home.z - pos.z);
+      if (d < bestD) {
+        bestD = d;
+        best = b;
+      }
+    }
+    best?.reset();
+  }
+
+  /* ================================================================ zones */
+  const nextZone = () => config.zones.find((z) => !z.ids.every((id) => unlocked.has(id)));
+  const ZONES = { about: ABOUT, experience: EXPERIENCE, work: WORK, skills: SKILLS, trophies: TROPHIES, contact: CONTACT };
+  const insideBy = (id: string, margin: number) => {
+    const z = ZONES[id as keyof typeof ZONES];
+    return !!z && Math.hypot(pos.x - z.centre.x, pos.z - z.centre.z) < z.radius + margin;
+  };
+  const inside = (id: string) => insideBy(id, 0);
+  let nearHold = 0;
+
+  /** Is any ball close enough (and in front enough) to be kicked right now? */
+  function ballInReach() {
+    facing.set(Math.sin(yaw), 0, Math.cos(yaw));
+    const footX = pos.x + facing.x * 0.55;
+    const footZ = pos.z + facing.z * 0.55;
+    for (const b of balls) {
+      if (b.pos.y > 1.3 || b.resetIn > 0) continue;
+      const dx = b.pos.x - pos.x;
+      const dz = b.pos.z - pos.z;
+      const d = Math.hypot(dx, dz);
+      const ahead = d > 1e-3 ? (dx * facing.x + dz * facing.z) / d : 1;
+      if (Math.hypot(b.pos.x - footX, b.pos.z - footZ) < 1.4 || (d < 2.5 && ahead > 0.4)) return true;
+    }
+    return false;
+  }
+
+  /* ================================================================ camera */
+  let shake = 0;
+  let camBlend = 0;
+  let orbitT = 0;
+  const camPos = new THREE.Vector3(0, 24, 42);
+  const camLook = new THREE.Vector3();
+  const followPos = new THREE.Vector3();
+  const followLook = new THREE.Vector3();
+  const orbitPos = new THREE.Vector3();
+  const orbitLook = new THREE.Vector3(0, 0, 0);
+
+  const portrait = () => canvas.clientHeight > canvas.clientWidth;
+
+  /** Dev-only: pin the camera somewhere specific (for inspecting the avatar). */
+  let debugCam: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null;
+
+  function updateCamera(dt: number) {
+    if (debugCam) {
+      camera.position.copy(debugCam.pos);
+      camera.lookAt(debugCam.look);
+      return;
+    }
+    orbitT += dt;
+    const a = orbitT * 0.07 + 0.4;
+    orbitPos.set(Math.sin(a) * 46, 22, Math.cos(a) * 46);
+
+    const z = zoom * (portrait() ? 1.35 : 1) * (1 - celebrateCam * 0.18);
+    const lead = 0.28;
+    followPos.set(pos.x + vel.x * lead, 8.2 * z, pos.z + 9.6 * z + vel.z * lead);
+    followLook.set(pos.x + vel.x * lead, 0.9, pos.z - 1.6 + vel.z * lead);
+
+    const t = camBlend * camBlend * (3 - 2 * camBlend);
+    const targetPos = orbitPos.clone().lerp(followPos, t);
+    const targetLook = orbitLook.clone().lerp(followLook, t);
+    const rate = camBlend >= 1 ? 5 : 30;
+    camPos.set(damp(camPos.x, targetPos.x, rate, dt), damp(camPos.y, targetPos.y, rate, dt), damp(camPos.z, targetPos.z, rate, dt));
+    camLook.set(damp(camLook.x, targetLook.x, rate, dt), damp(camLook.y, targetLook.y, rate, dt), damp(camLook.z, targetLook.z, rate, dt));
+
+    camera.position.copy(camPos);
+    if (shake > 0) {
+      camera.position.x += (Math.random() - 0.5) * shake;
+      camera.position.y += (Math.random() - 0.5) * shake;
+      shake = Math.max(0, shake - dt * 1.4);
+    }
+    camera.lookAt(camLook);
+    celebrateCam = Math.max(0, celebrateCam - dt * 0.6);
+  }
+
+  /* ======================================================= stable shadows */
+  const SUN_OFFSET = new THREE.Vector3(-16, 32, 12);
+  const sunFwd = SUN_OFFSET.clone().negate().normalize();
+  const sunRight = new THREE.Vector3().crossVectors(sunFwd, new THREE.Vector3(0, 1, 0)).normalize();
+  const sunUp = new THREE.Vector3().crossVectors(sunRight, sunFwd).normalize();
+  const shadowCam = world.sun.shadow.camera;
+  const texel = (shadowCam.right - shadowCam.left) / world.sun.shadow.mapSize.x;
+  const centre = new THREE.Vector3();
+
+  function snapShadow(x: number, z: number) {
+    centre.set(x, 0, z);
+    const r = centre.dot(sunRight);
+    const u = centre.dot(sunUp);
+    centre.addScaledVector(sunRight, Math.round(r / texel) * texel - r);
+    centre.addScaledVector(sunUp, Math.round(u / texel) * texel - u);
+    world.sun.target.position.copy(centre);
+    world.sun.position.copy(centre).add(SUN_OFFSET);
+  }
+
+  /* ================================================================= frame */
+  let time = 0;
+  let playTime = 0;
+  let ready = false;
+  let contactInside = false;
+  let slow = 0;
+  let frames = 0;
+  let orbStep = 0;
+  let waveClock = 1.5;
+  // THREE.Clock is deprecated in r186; Timer also zeroes delta while the tab is hidden.
+  const timer = new THREE.Timer();
+  timer.connect(document);
+
+  function frame(timestamp?: number) {
+    timer.update(timestamp);
+    const dt = Math.min(timer.getDelta(), 1 / 20);
+    // Slow motion eases back to full speed over the goal celebration.
+    slowMo = Math.max(0, slowMo - dt);
+    const scale = slowMo > 0 ? 0.3 + 0.7 * Math.pow(1 - Math.min(slowMo, 0.9) / 0.9, 3) : 1;
+    step(dt * scale);
+    if (composer) {
+      composer.render();
+      if (composerChecks > 0 && --composerChecks === 0 && composerLooksBroken()) {
+        dropComposer();
+        renderer.render(scene, camera);
+      }
+    } else {
+      renderer.render(scene, camera);
+    }
+
+    if (!ready) {
+      ready = true;
+      config.onProgress?.(1, "Kick off");
+      config.onReady();
+    }
+
+    // Can't hold ~40fps? Trade resolution for smoothness, once.
+    if (frames < 200 && started) {
+      frames++;
+      if (dt > 0.026) slow++;
+      if (frames === 200 && slow > 110 && dpr > 1) {
+        dpr = 1;
+        renderer.setPixelRatio(1);
+        resize();
+      }
+    }
+  }
+
+  function step(dt: number) {
+    time += dt;
+    tickTimers(dt);
+
+    /* ---------------------------------------------------------- player */
+    const input = inputVector();
+    const max = input.sprint ? SPRINT : WALK;
+    const tx = input.x * max;
+    const tz = input.z * max;
+    const accel = Math.hypot(tx, tz) > 0.01 ? 9 : 7;
+    vel.x = damp(vel.x, tx, accel, dt);
+    vel.z = damp(vel.z, tz, accel, dt);
+    pos.x += vel.x * dt;
+    pos.z += vel.z * dt;
+    for (const c of colliders) {
+      if (!c.player) continue;
+      const n = penetration(pos.x, pos.z, PLAYER_R, c);
+      if (!n) continue;
+      pos.x += n.x * n.depth;
+      pos.z += n.z * n.depth;
+      const vn = vel.x * n.x + vel.z * n.z;
+      if (vn < 0) {
+        vel.x -= vn * n.x;
+        vel.z -= vn * n.z;
+      }
+    }
+    const speed = Math.hypot(vel.x, vel.z);
+    if (speed > 0.4 && !player.busy) {
+      const want = Math.atan2(vel.x, vel.z);
+      yaw += angleDelta(yaw, want) * (1 - Math.exp(-12 * dt));
+    }
+    player.root.position.copy(pos);
+    player.root.rotation.y = yaw;
+    player.update(dt, Math.min(1, speed / SPRINT) * (speed > 0.15 ? 1 : 0), time);
+    if (speed > WALK + 1 && Math.random() < dt * 14) dust.emit(pos.x, pos.z);
+
+    if (!started) {
+      waveClock -= dt;
+      if (waveClock <= 0) {
+        player.play("wave");
+        waveClock = 5.5;
+      }
+    }
+
+    /* ------------------------------------------------------------ kick */
+    kickCooldown = Math.max(0, kickCooldown - dt);
+    if (kickHeld && !paused) {
+      charge = Math.min(charge + dt, 0.9);
+      ring.set(charge / 0.9);
+    }
+    if (!kickHeld && wasHeld) {
+      if (kickCooldown <= 0 && !paused) {
+        const power = 0.25 + (charge / 0.9) * 0.75;
+        player.play("kick");
+        kickCooldown = 0.45;
+        // Contact happens as the leg swings through, not on key release.
+        strikeIn = 0.19;
+        strikePower = power;
+      }
+      charge = 0;
+      ring.set(0);
+    }
+    wasHeld = kickHeld;
+    ring.mesh.position.set(pos.x, 0.04, pos.z);
+
+    /* ---------------------------------------------------------- keeper */
+    const tb = balls[4];
+    const incoming = tb.vel.x > 5 && tb.pos.x > 30 && tb.pos.x < GOAL.lineX && Math.abs(tb.pos.z) < 12;
+    let kTarget = Math.sin(time * 0.9) * 1.8;
+    let kSpeed = 2.2;
+    if (incoming) {
+      const tHit = (TROPHIES.keeperX - tb.pos.x) / tb.vel.x;
+      kTarget = THREE.MathUtils.clamp(tb.pos.z + tb.vel.z * tHit, -GOAL.halfWidth + 0.4, GOAL.halfWidth - 0.4);
+      kSpeed = 4.6;
+      if (!keeperDived && Math.abs(kTarget - keeperZ) > 0.7 && tHit < 0.45) {
+        keeperDived = true;
+        // keeper faces −X, so his left (+1) is world +Z
+        keeper.play("dive", kTarget > keeperZ ? 1 : -1);
+      }
+    } else if (tb.vel.x <= 0) {
+      keeperDived = false;
+    }
+    const step = THREE.MathUtils.clamp(kTarget - keeperZ, -kSpeed * dt, kSpeed * dt);
+    keeperZ += step;
+    keeper.root.position.set(TROPHIES.keeperX, 0, keeperZ);
+    keeperCol.z = keeperZ;
+    keeperCol.r = keeperDived ? 0.85 : 0.5;
+    keeper.update(dt, Math.min(1, Math.abs(step / dt) / 6), time, 0.8);
+
+    /* ----------------------------------------------------------- balls */
+    for (const b of balls) {
+      b.step(dt, colliders);
+
+      // dribbling: running into the ball carries it just ahead of you
+      if (b.pos.y < 1.1 && b.resetIn < 0) {
+        const n = penetration(b.pos.x, b.pos.z, b.r, circle(pos.x, pos.z, PLAYER_R, 2));
+        if (n) {
+          b.pos.x += n.x * n.depth;
+          b.pos.z += n.z * n.depth;
+          const pv = Math.max(0, vel.x * n.x + vel.z * n.z);
+          const vn = b.vel.x * n.x + b.vel.z * n.z;
+          const want = pv * 1.08 + 0.25;
+          if (vn < want) {
+            b.vel.x += n.x * (want - vn);
+            b.vel.z += n.z * (want - vn);
+          }
+        }
+
+        // Trap: winding up a shot stops a nearby ball under your foot, so a
+        // charged kick never finds the ball has rolled out of reach.
+        if ((kickHeld || strikeIn > 0) && b.grounded) {
+          const dx = b.pos.x - pos.x;
+          const dz = b.pos.z - pos.z;
+          const d = Math.hypot(dx, dz);
+          if (d < 2.4 && (dx * Math.sin(yaw) + dz * Math.cos(yaw)) / Math.max(d, 1e-3) > 0.2) {
+            const k = Math.exp(-9 * dt);
+            b.vel.x *= k;
+            b.vel.z *= k;
+          }
+        }
+      }
+
+      // lost balls come home
+      if (Math.abs(b.pos.x) > 58 || Math.abs(b.pos.z) > 44 || b.pos.y < -2) b.reset();
+
+      if (b.cooldown <= 0 && b.resetIn < 0) {
+        const hw = GOAL.halfWidth;
+        const underBar = b.pos.y < GOAL.height && Math.abs(b.pos.z) < hw;
+
+        /* east goal — trophies */
+        if (underBar && b.pos.x - b.r > GOAL.lineX) {
+          b.resetIn = 1.6;
+          b.cooldown = 2;
+          const id = idsOf("trophies").find((t) => !unlocked.has(t));
+          config.onEvent({ type: "goal", zone: "trophies" });
+          slowMo = 0.9;
+          if (id) reveal(id, b.pos.clone());
+          else {
+            player.play("celebrate");
+            confetti.burst(b.pos.x, 1, b.pos.z, 90);
+            audio.cheer(true);
+          }
+        }
+        /* west goal — about */
+        else if (underBar && b.pos.x + b.r < -GOAL.lineX) {
+          b.resetIn = 1.6;
+          b.cooldown = 2;
+          config.onEvent({ type: "goal", zone: "about" });
+          slowMo = 0.9;
+          reveal(idsOf("about")[0] ?? "about", b.pos.clone());
+        }
+
+        /* keeper save */
+        if (b === tb && (prevVX.get(b) ?? 0) > 5 && b.vel.x < 0 && b.pos.x > 42) {
+          config.onEvent({ type: "save" });
+          audio.groan();
+          b.resetIn = 1.4;
+          b.cooldown = 1.5;
+        }
+
+        /* gates */
+        const px = prevX.get(b) ?? b.pos.x;
+        world.gates.forEach((g, i) => {
+          if (px > g.x && b.pos.x <= g.x && Math.abs(b.pos.z - EXPERIENCE.z) < EXPERIENCE.halfWidth && b.pos.y < 1.5) {
+            const id = idsOf("experience")[i];
+            markGate(i);
+            if (id) {
+              audio.collect(i);
+              reveal(id, new THREE.Vector3(g.x, 0.5, EXPERIENCE.z));
+            }
+          }
+        });
+
+        /* targets */
+        const face = WORK.wall.z + WORK.wall.depth / 2;
+        if (b.pos.z - b.r <= face + 0.08 && Math.abs(b.pos.x) < 15.5) {
+          world.targets.forEach((t, i) => {
+            if (b.cooldown > 0) return;
+            if (Math.hypot(b.pos.x - t.x, b.pos.y - t.y) < WORK.targetR + 0.12) {
+              b.cooldown = 2;
+              b.resetIn = 1.4;
+              t.pulse = 1;
+              world.markTarget(t, i);
+              config.onEvent({ type: "bullseye" });
+              reveal(t.id, new THREE.Vector3(t.x, t.y, face + 0.5));
+            }
+          });
+        }
+      }
+      prevX.set(b, b.pos.x);
+      prevVX.set(b, b.vel.x);
+      trails.update(balls.indexOf(b), b.pos.x, b.pos.y, b.pos.z, b.vel.length(), dt);
+    }
+
+    /* ------------------------------------------------------------ pins */
+    const pinEvent = pins.update(dt, balls, pos.x, pos.z, vel.x, vel.z);
+    if (pinEvent === "knock") audio.bounce(8);
+    if (pinEvent === "strike") {
+      audio.cheer(true);
+      confetti.burst(PINS.x + 1, 1, PINS.z, 120);
+      player.play("celebrate");
+      world.uniforms.uCheer.value = 1;
+      cheerHold = 0.8;
+      config.onEvent({ type: "strike" });
+    }
+
+    /* ------------------------------------------------------------ orbs */
+    for (const o of world.orbs) {
+      if (o.taken) continue;
+      if (Math.hypot(pos.x - o.x, pos.z - o.z) < 1.45) {
+        o.taken = true;
+        audio.collect(orbStep++);
+        gsap.to(o.group.scale, { x: 0, y: 0, z: 0, duration: 0.45, ease: "back.in(2)", onComplete: () => void (o.group.visible = false) });
+        reveal(o.id, o.group.position.clone());
+      }
+    }
+
+    /* --------------------------------------------------------- contact */
+    const onPad = Math.hypot(pos.x - CONTACT.pad.x, pos.z - CONTACT.pad.z) < CONTACT.padR;
+    if (onPad && !contactInside && started) reveal(idsOf("contact")[0] ?? "contact", new THREE.Vector3(CONTACT.pad.x, 1, CONTACT.pad.z));
+    contactInside = onPad;
+
+    /* -------------------------------------------------------- guidance */
+    const next = started ? nextZone() : undefined;
+    const anchor = next ? ZONE_ANCHORS[next.id] : null;
+    const beaconMat = beacon.material as THREE.ShaderMaterial;
+    if (anchor) {
+      beacon.visible = true;
+      beacon.position.x = anchor.x;
+      beacon.position.z = anchor.z;
+      const d = Math.hypot(anchor.x - pos.x, anchor.z - pos.z);
+      beaconMat.uniforms.uAlpha.value = damp(beaconMat.uniforms.uAlpha.value, d < 6 ? 0.25 : 1, 4, dt);
+      const arrowMat = arrow.material as THREE.MeshBasicMaterial;
+      arrowMat.opacity = damp(arrowMat.opacity, d > 9 && !paused ? 0.85 : 0, 5, dt);
+      const ang = Math.atan2(anchor.x - pos.x, anchor.z - pos.z);
+      arrow.position.set(pos.x + Math.sin(ang) * 1.6, 0.05, pos.z + Math.cos(ang) * 1.6);
+      // shape points +Y; laid flat it points −Z, so turn it half a revolution further
+      arrow.rotation.set(-Math.PI / 2, ang + Math.PI, 0);
+    } else {
+      beacon.visible = false;
+      (arrow.material as THREE.MeshBasicMaterial).opacity = 0;
+    }
+    zoneRings.forEach((m, id) => {
+      const mat = m.material as THREE.MeshBasicMaterial;
+      const done = idsOf(id).every((x) => unlocked.has(x));
+      if (done) {
+        mat.color.set("#e8ff4f");
+        mat.opacity = 0.55;
+      } else if (next?.id === id) {
+        mat.color.set("#ffffff");
+        mat.opacity = 0.45 + Math.sin(time * 4) * 0.25;
+      } else {
+        mat.color.set("#6e5bff");
+        mat.opacity = 0.35;
+      }
+    });
+
+    /* -------------------------------------------------------- the rest */
+    world.update(time, dt);
+    dust.update(dt);
+    confetti.update(dt);
+    snapShadow(pos.x, pos.z);
+    updateCamera(dt);
+
+    if (started && !paused) playTime += dt;
+    nearHold = Math.max(0, nearHold - dt);
+  }
+
+  function resize() {
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    if (!w || !h) return;
+    renderer.setSize(w, h, false);
+    composer?.setPixelRatio(renderer.getPixelRatio());
+    composer?.setSize(w, h);
+    camera.aspect = w / h;
+    camera.fov = portrait() ? 58 : 45;
+    camera.updateProjectionMatrix();
+  }
+  resize();
+  const ro = new ResizeObserver(resize);
+  ro.observe(canvas);
+
+  // Compile every shader before the first frame, so the stadium never hitches
+  // the first time something new comes into view.
+  config.onProgress?.(0.88, "Switching on the floodlights");
+  updateCamera(0);
+  let disposed = false;
+  // Async compile needs KHR_parallel_shader_compile; without it, compile up
+  // front synchronously (no warning, same result).
+  const compiled = renderer.extensions.has("KHR_parallel_shader_compile")
+    ? renderer.compileAsync(scene, camera).catch(() => undefined)
+    : Promise.resolve(renderer.compile(scene, camera));
+  compiled.then(() => !disposed && renderer.setAnimationLoop(frame));
+
+  /** Leave the title screen: whistle, crowd, and the camera swoops down to the player. */
+  function startMatch() {
+    if (started) return;
+    started = true;
+    audio.unlock();
+    audio.whistle();
+    audio.cheer(false);
+    introT = 0;
+  }
+
+  if (process.env.NODE_ENV === "development") {
+    // Poke at the simulation from the console: __game.pos, __game.balls…
+    (window as unknown as { __game: unknown }).__game = {
+      pos,
+      vel,
+      balls,
+      keys,
+      unlocked,
+      start: startMatch,
+      /** Pin the camera: __game.cam([x,y,z],[lx,ly,lz]); call with no args to release. */
+      cam(p?: [number, number, number], l?: [number, number, number]) {
+        debugCam = p && l ? { pos: new THREE.Vector3(...p), look: new THREE.Vector3(...l) } : null;
+      },
+      get paused() {
+        return paused;
+      },
+      /** Is the bloom + SMAA pipeline active (or did the self-test fall back)? */
+      get postProcessing() {
+        return !!composer;
+      },
+      /** Run the simulation forward synchronously, independent of rAF. */
+      advance(seconds: number) {
+        for (let t = 0; t < seconds; t += 1 / 60) step(1 / 60);
+        renderer.render(scene, camera);
+      },
+    };
+  }
+
+  const snap: Snapshot = {
+    x: 0,
+    z: 0,
+    yaw: 0,
+    charge: 0,
+    near: false,
+    zone: null,
+    next: null,
+    nextDist: 0,
+    playTime: 0,
+    keeperZ: 0,
+    balls: balls.map(() => ({ x: 0, z: 0 })),
+    started: false,
+    paused: true,
+  };
+
+  /** Cheap to call every frame: fills and returns one shared object. */
+  function snapshot(): Snapshot {
+    snap.x = pos.x;
+    snap.z = pos.z;
+    snap.yaw = yaw;
+    snap.charge = kickHeld ? charge / 0.9 : 0;
+    if (started && !paused && ballInReach()) nearHold = 0.35;
+    snap.near = nearHold > 0 && !paused;
+    if (!(snap.zone && insideBy(snap.zone, 2))) snap.zone = config.zones.find((z) => inside(z.id))?.id ?? null;
+    const next = nextZone();
+    snap.next = next?.id ?? null;
+    const a = next ? ZONE_ANCHORS[next.id] : null;
+    snap.nextDist = a ? Math.hypot(a.x - pos.x, a.z - pos.z) : 0;
+    snap.playTime = playTime;
+    snap.keeperZ = keeperZ;
+    balls.forEach((b, i) => {
+      snap.balls[i].x = b.pos.x;
+      snap.balls[i].z = b.pos.z;
+    });
+    snap.started = started;
+    snap.paused = paused;
+    return snap;
+  }
+
+  /* ============================================================ public API */
+  return {
+    start: startMatch,
+    snapshot,
+    resume() {
+      if (!started) return;
+      paused = false;
+    },
+    pause() {
+      paused = true;
+      keys.clear();
+      kickHeld = false;
+    },
+    setJoystick(x: number, y: number) {
+      joy.x = x;
+      joy.y = y;
+    },
+    setKick(down: boolean) {
+      if (!paused) kickHeld = down;
+    },
+    resetBall: resetNearestBall,
+    unlockAll(ids: string[]) {
+      ids.forEach((id) => unlocked.add(id));
+      syncProps();
+    },
+    setMuted(m: boolean) {
+      audio.setMuted(m);
+    },
+    dispose() {
+      disposed = true;
+      timer.dispose();
+      renderer.setAnimationLoop(null);
+      composer?.dispose();
+      pins.dispose();
+      trails.dispose();
+      ro.disconnect();
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+      canvas.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("webglcontextlost", onContextLost);
+      canvas.removeEventListener("webglcontextrestored", onContextRestored);
+      audio.dispose();
+      world.dispose();
+      player.dispose();
+      keeper.dispose();
+      balls.forEach((b) => b.mesh.geometry.dispose());
+      ballMat.map?.dispose();
+      ballMat.dispose();
+      ring.dispose();
+      dust.dispose();
+      confetti.dispose();
+      beacon.geometry.dispose();
+      (beacon.material as THREE.Material).dispose();
+      arrow.geometry.dispose();
+      (arrow.material as THREE.Material).dispose();
+      ramp.dispose();
+      renderer.dispose();
+    },
+  };
+}

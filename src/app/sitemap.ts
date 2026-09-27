@@ -6,7 +6,7 @@ import { SITE_URL } from "@/lib/constants";
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const projects = await getProjects();
 
-  const staticRoutes = ["", "/about", "/projects", "/contact"].map((route) => ({
+  const staticRoutes = ["", "/portfolio", "/about", "/projects", "/contact"].map((route) => ({
     url: `${SITE_URL}${route}`,
     lastModified: new Date(),
     changeFrequency: "monthly" as const,

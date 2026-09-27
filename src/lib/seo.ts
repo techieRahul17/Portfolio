@@ -41,6 +41,9 @@ export function buildMetadata({
     description,
     keywords: [
       profile.name,
+      "Frontend Developer",
+      "Three.js",
+      "GSAP",
       "Software Engineer",
       "SSN College of Engineering",
       "Full-Stack Developer",

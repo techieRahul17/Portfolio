@@ -2,6 +2,11 @@ import type { SkillGroup } from "@/types";
 
 export const skills: SkillGroup[] = [
   {
+    title: "3D & Motion",
+    note: "What makes it move",
+    items: ["Three.js", "WebGL", "GSAP", "ScrollTrigger", "Lenis"],
+  },
+  {
     title: "Languages",
     note: "What I think in",
     items: ["Python", "Java", "C", "C++", "JavaScript", "TypeScript"],
@@ -73,6 +78,9 @@ export const skills: SkillGroup[] = [
 
 /** Flat keyword list for the hero marquee. */
 export const marqueeWords = [
+  "Three.js",
+  "GSAP",
+  "WebGL",
   "React",
   "Java",
   "Spring Boot",

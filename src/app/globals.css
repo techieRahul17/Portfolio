@@ -186,6 +186,18 @@ html.lenis body {
   animation: grain 8s steps(10) infinite;
 }
 
+/* Game HUD hints rise into place each time the objective changes. */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @keyframes grain {
   0%,
   100% {

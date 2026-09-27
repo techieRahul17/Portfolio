@@ -1,7 +1,7 @@
 import { ArrowDown, ArrowUpRight } from "lucide-react";
 import { profile } from "@/data/profile";
 import { marqueeWords } from "@/data/skills";
-import { HeroField } from "@/components/motion/HeroField";
+import { HeroName } from "@/components/three/HeroName";
 import { RoleRotator } from "@/components/motion/RoleRotator";
 import { Marquee } from "@/components/motion/Marquee";
 import { Magnetic } from "@/components/motion/Magnetic";
@@ -9,20 +9,16 @@ import { ButtonLink } from "@/components/ui/Button";
 
 export function Hero() {
   return (
-    <section className="relative flex min-h-[100svh] flex-col justify-between overflow-hidden pt-[var(--nav-h)]">
-      {/* ------------------------------ backdrop ------------------------------ */}
-      <HeroField className="absolute inset-0 -z-20 h-full w-full opacity-70" />
+    <section
+      id="top"
+      className="relative flex min-h-[100svh] flex-col justify-between overflow-x-clip pt-[var(--nav-h)]"
+    >
+      {/* The backdrop is the WebGL universe (<UniverseCanvas>), fixed behind the page.
+          This soft shadow just keeps the name legible where it crosses the planet. */}
       <div
         aria-hidden
-        className="pointer-events-none absolute -top-1/4 left-1/2 -z-10 h-[70vh] w-[min(120vw,70rem)] -translate-x-1/2 rounded-[50%] opacity-40 blur-[130px]"
-        style={{
-          background:
-            "radial-gradient(closest-side, rgba(110,91,255,0.55), rgba(232,255,79,0.12) 60%, transparent)",
-        }}
-      />
-      <div
-        aria-hidden
-        className="from-bg pointer-events-none absolute inset-x-0 bottom-0 -z-10 h-40 bg-gradient-to-t to-transparent"
+        className="pointer-events-none absolute top-1/4 -left-1/4 -z-10 h-[70vh] w-[min(110vw,60rem)] rounded-[50%] opacity-70 blur-[120px]"
+        style={{ background: "radial-gradient(closest-side, rgba(7,7,10,0.9), transparent)" }}
       />
 
       {/* ------------------------------- top meta ----------------------------- */}
@@ -54,23 +50,10 @@ export function Hero() {
           {profile.name} — {profile.role}
         </h1>
 
-        <div aria-hidden className="font-display leading-[0.82] tracking-[-0.05em]">
-          <div
-            data-split="chars"
-            data-reveal-delay="0.1"
-            className="text-[clamp(3.5rem,19vw,17rem)] font-medium"
-          >
-            RAHUL
-          </div>
-          <div className="flex flex-wrap items-end gap-x-8 gap-y-4">
-            <div
-              data-split="chars"
-              data-reveal-delay="0.25"
-              className="text-accent text-[clamp(3.5rem,19vw,17rem)] font-medium"
-            >
-              V S
-            </div>
-
+        <HeroName
+          first={profile.nameParts[0]}
+          second={profile.nameParts[1]}
+          aside={
             <div data-reveal data-reveal-delay="0.55" className="mb-3 hidden flex-1 lg:block">
               <span className="text-faint block font-mono text-[0.65rem] tracking-[0.25em] uppercase">
                 Currently
@@ -80,8 +63,8 @@ export function Hero() {
                 className="font-sans text-lg font-normal tracking-normal"
               />
             </div>
-          </div>
-        </div>
+          }
+        />
       </div>
 
       {/* ------------------------------ intro block --------------------------- */}
@@ -143,7 +126,8 @@ export function Hero() {
           data-reveal-delay="0.9"
           className="text-faint text-right font-mono text-[0.65rem] tracking-[0.25em] uppercase"
         >
-          ex-Amazon <span className="text-accent">SDE Intern</span>
+          Three.js <span className="text-accent">×</span> GSAP{" "}
+          <span className="text-muted">· ex-Amazon</span>
         </p>
       </div>
     </section>

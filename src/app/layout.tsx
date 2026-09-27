@@ -8,6 +8,7 @@ import { Preloader } from "@/components/motion/Preloader";
 import { Cursor } from "@/components/motion/Cursor";
 import { ScrollProgress } from "@/components/motion/ScrollProgress";
 import { PageTransition } from "@/components/motion/PageTransition";
+import { SiteChrome } from "@/components/layout/SiteChrome";
 import { buildMetadata } from "@/lib/seo";
 import { SITE_URL } from "@/lib/constants";
 import "./globals.css";
@@ -76,15 +77,22 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </a>
 
         <MotionProvider>
-          <Preloader />
           <PageTransition />
-          <Cursor />
-          <ScrollProgress />
           <Animator />
+          {/* The game at "/" is full-screen and brings its own HUD. */}
+          <SiteChrome>
+            <Preloader />
+            <Cursor />
+            <ScrollProgress />
+          </SiteChrome>
 
-          <Navbar />
+          <SiteChrome>
+            <Navbar />
+          </SiteChrome>
           <main id="main">{children}</main>
-          <Footer />
+          <SiteChrome>
+            <Footer />
+          </SiteChrome>
         </MotionProvider>
       </body>
     </html>

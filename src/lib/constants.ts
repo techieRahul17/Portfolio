@@ -12,10 +12,11 @@ export const SITE_URL =
     : "http://localhost:3000");
 
 export const NAV_LINKS = [
-  { href: "/", label: "Index", num: "01" },
-  { href: "/about", label: "About", num: "02" },
-  { href: "/projects", label: "Work", num: "03" },
-  { href: "/contact", label: "Contact", num: "04" },
+  { href: "/", label: "Play", num: "01" },
+  { href: "/portfolio", label: "Index", num: "02" },
+  { href: "/about", label: "About", num: "03" },
+  { href: "/projects", label: "Work", num: "04" },
+  { href: "/contact", label: "Contact", num: "05" },
 ] as const;
 
 /** Anchors used by the home page's in-section nav. */

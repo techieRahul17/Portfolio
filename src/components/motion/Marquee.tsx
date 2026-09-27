@@ -16,7 +16,7 @@ export function Marquee({
   speed = 40,
   reverse = false,
   className,
-  separator = "✦",
+  separator = "/",
 }: {
   items: string[];
   /** Pixels per second at rest. */

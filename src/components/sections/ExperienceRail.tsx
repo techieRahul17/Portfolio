@@ -5,6 +5,7 @@ import { gsap, useGSAP, ScrollTrigger } from "@/lib/gsap";
 import { experience, education } from "@/data/experience";
 import type { ExperienceItem } from "@/types";
 import { Badge } from "@/components/ui/Badge";
+import { Tilt } from "@/components/motion/Tilt";
 
 const items: ExperienceItem[] = [...experience, ...education];
 
@@ -137,60 +138,61 @@ export function ExperienceRail() {
 
         {/* -------------------------------- cards ---------------------------- */}
         {items.map((item, i) => (
-          <article
-            key={`${item.company}-${item.role}`}
-            data-xp-card
-            className={[
-              "panel relative flex flex-col rounded-2xl p-7 sm:p-9",
-              "lg:h-[min(34rem,68vh)] lg:w-[min(40rem,80vw)] lg:shrink-0",
-              item.featured ? "border-accent/40" : "",
-            ].join(" ")}
-          >
-            {item.featured && (
-              <span
-                aria-hidden
-                className="bg-accent absolute -top-px left-8 h-px w-24"
-                style={{ boxShadow: "0 0 24px 2px var(--accent)" }}
-              />
-            )}
+          <Tilt key={`${item.company}-${item.role}`} max={6} className="rounded-2xl lg:shrink-0">
+            <article
+              data-xp-card
+              className={[
+                "panel relative flex flex-col rounded-2xl p-7 sm:p-9",
+                "lg:h-[min(34rem,68vh)] lg:w-[min(40rem,80vw)]",
+                item.featured ? "border-accent/40" : "",
+              ].join(" ")}
+            >
+              {item.featured && (
+                <span
+                  aria-hidden
+                  className="bg-accent absolute -top-px left-8 h-px w-24"
+                  style={{ boxShadow: "0 0 24px 2px var(--accent)" }}
+                />
+              )}
 
-            <header className="flex items-start justify-between gap-6">
-              <div>
-                <p className="text-faint font-mono text-[0.65rem] tracking-[0.22em] uppercase">
-                  {item.kind === "education" ? "Education" : `Role ${String(i + 1).padStart(2, "0")}`}
-                </p>
-                <h3 className="font-display mt-3 text-2xl leading-tight sm:text-3xl">
-                  {item.role}
-                </h3>
-                <p className="text-accent mt-1.5 text-sm">{item.company}</p>
-              </div>
-              <div className="text-muted shrink-0 text-right font-mono text-[0.65rem] tracking-[0.15em] uppercase">
-                <p>{item.period}</p>
-                {item.location && <p className="text-faint mt-1">{item.location}</p>}
-              </div>
-            </header>
+              <header className="flex items-start justify-between gap-6">
+                <div>
+                  <p className="text-faint font-mono text-[0.65rem] tracking-[0.22em] uppercase">
+                    {item.kind === "education" ? "Education" : `Role ${String(i + 1).padStart(2, "0")}`}
+                  </p>
+                  <h3 className="font-display mt-3 text-2xl leading-tight sm:text-3xl">
+                    {item.role}
+                  </h3>
+                  <p className="text-accent mt-1.5 text-sm">{item.company}</p>
+                </div>
+                <div className="text-muted shrink-0 text-right font-mono text-[0.65rem] tracking-[0.15em] uppercase">
+                  <p>{item.period}</p>
+                  {item.location && <p className="text-faint mt-1">{item.location}</p>}
+                </div>
+              </header>
 
-            {item.summary && (
-              <p className="text-muted mt-6 leading-relaxed">{item.summary}</p>
-            )}
+              {item.summary && (
+                <p className="text-muted mt-6 leading-relaxed">{item.summary}</p>
+              )}
 
-            <ul className="mt-6 flex-1 space-y-3.5 overflow-y-auto" data-lenis-prevent>
-              {item.points.map((point) => (
-                <li key={point} className="text-muted flex gap-3 text-sm leading-relaxed">
-                  <span aria-hidden className="bg-accent mt-2 h-1 w-1 shrink-0 rounded-full" />
-                  {point}
-                </li>
-              ))}
-            </ul>
-
-            {item.stack && item.stack.length > 0 && (
-              <div className="border-line mt-7 flex flex-wrap gap-2 border-t pt-6">
-                {item.stack.map((tech) => (
-                  <Badge key={tech}>{tech}</Badge>
+              <ul className="mt-6 flex-1 space-y-3.5 overflow-y-auto" data-lenis-prevent>
+                {item.points.map((point) => (
+                  <li key={point} className="text-muted flex gap-3 text-sm leading-relaxed">
+                    <span aria-hidden className="bg-accent mt-2 h-1 w-1 shrink-0 rounded-full" />
+                    {point}
+                  </li>
                 ))}
-              </div>
-            )}
-          </article>
+              </ul>
+
+              {item.stack && item.stack.length > 0 && (
+                <div className="border-line mt-7 flex flex-wrap gap-2 border-t pt-6">
+                  {item.stack.map((tech) => (
+                    <Badge key={tech}>{tech}</Badge>
+                  ))}
+                </div>
+              )}
+            </article>
+          </Tilt>
         ))}
       </div>
 

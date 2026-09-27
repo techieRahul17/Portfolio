@@ -140,7 +140,7 @@ export function Preloader() {
             <div data-pre-bar className="bg-accent h-px w-full origin-left scale-x-0" />
           </div>
           <p className="text-faint mt-3 font-mono text-[0.65rem] tracking-[0.25em] uppercase">
-            Loading experience
+            Initialising universe
           </p>
         </div>
         <p
