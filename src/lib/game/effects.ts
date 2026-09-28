@@ -148,7 +148,8 @@ export function chargeRing() {
     new THREE.MeshBasicMaterial({ color: "#e8ff4f", transparent: true, opacity: 0, depthWrite: false }),
   );
   mesh.rotation.x = -Math.PI / 2;
-  mesh.position.y = 0.04;
+  // above the grass blades, so the power ring stays readable
+  mesh.position.y = 0.3;
   let last = -1;
   return {
     mesh,

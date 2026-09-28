@@ -101,6 +101,10 @@ export function createAudio() {
       if (v < 0.08) return;
       tone(120, 0.1, 0.15 + v * 0.25, "sine", 60);
     },
+    /** Countdown pip: three short, then a long high one for the kick-off. */
+    beep(final = false) {
+      tone(final ? 1320 : 880, final ? 0.4 : 0.14, 0.14, "square");
+    },
     whistle() {
       if (!ctx) return;
       for (const [d, len] of [
@@ -135,6 +139,14 @@ export function createAudio() {
       crowdGain.gain.cancelScheduledValues(t);
       crowdGain.gain.setTargetAtTime(big ? 0.14 : 0.09, t, 0.1);
       crowdGain.gain.setTargetAtTime(0.05, t + (big ? 2.2 : 1.2), 0.6);
+    },
+    /** A soft footfall on turf: quieter walking, a touch crisper sprinting. */
+    step(speed: number) {
+      burst(0.05, 900 + speed * 900, 1.2, 0.015 + speed * 0.03, "bandpass");
+    },
+    /** Boots scraping the grass. */
+    skid() {
+      burst(0.35, 1400, 0.6, 0.12, "bandpass");
     },
     groan() {
       burst(1.2, 380, 0.5, 0.35, "lowpass");

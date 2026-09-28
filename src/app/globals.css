@@ -274,6 +274,27 @@ html.lenis body {
 }
 
 /* ===============================================================
+   GAME ROUTE
+   The game's canvas redraws every frame. Frosted-glass panels would
+   re-blur it every frame too — costly, and on some GPU/driver combos
+   a source of flicker — so inside the game panels are solid instead.
+   The film grain is for the editorial site, not a 3D scene: off here.
+   =============================================================== */
+.grain:has([data-game-root])::after {
+  display: none;
+}
+
+[data-game-root] .panel,
+[data-game-root] [class*="backdrop-blur"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+[data-game-root] .panel {
+  background: color-mix(in oklab, var(--bg-2) 93%, transparent);
+}
+
+/* ===============================================================
    CUSTOM CURSOR
    Only engaged on devices with a real pointer; the native cursor
    stays put on touch and for anyone who prefers reduced motion.

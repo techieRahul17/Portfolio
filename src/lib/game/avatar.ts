@@ -33,7 +33,19 @@ export type Kit = {
   back?: { name: string; number: string };
 };
 
-type ActionName = "kick" | "celebrate" | "wave" | "dive";
+type ActionName = "kick" | "celebrate" | "wave" | "dive" | "airplane" | "fistpump" | "stretch" | "bounce" | "skid";
+
+/** Extra context from the engine that shapes the pose each frame. */
+export type Pose = {
+  /** Turning rate, rad/s — the body banks into the turn. */
+  turn?: number;
+  /** Change in speed, units/s² — lean forward to accelerate, back to brake. */
+  accel?: number;
+  /** Where the nearest ball is, relative to facing (rad), or null. */
+  look?: number | null;
+  /** 0..1: ball at your feet — crouch over it, shorter stride. */
+  dribble?: number;
+};
 type Action = { name: ActionName; t: number; dur: number; dir: number };
 
 const damp = (a: number, b: number, rate: number, dt: number) =>
@@ -113,6 +125,14 @@ export class Character {
 
   private phase = 0;
   private run = 0;
+  private roll = 0;
+  private lean = 0;
+  private lookYaw = 0;
+  private hunch = 0;
+  private lastSw = 0;
+  private idleClock = 4;
+  /** Called as each foot plants while moving (0 = left, 1 = right). */
+  onStep?: (foot: number, speed: number) => void;
   private blink = 2 + Math.random() * 3;
   private action: Action | null = null;
   private materials = new Map<string, THREE.Material>();
@@ -407,23 +427,64 @@ export class Character {
   /* ---------------------------------------------------------------- actions */
 
   play(name: ActionName, dir = 1) {
-    const dur = { kick: 0.55, celebrate: 1.9, wave: 2.4, dive: 0.9 }[name];
+    const dur = {
+      kick: 0.55,
+      celebrate: 1.9,
+      wave: 2.4,
+      dive: 0.9,
+      airplane: 2.1,
+      fistpump: 1.5,
+      stretch: 1.7,
+      bounce: 1.3,
+      skid: 0.5,
+    }[name];
     this.action = { name, t: 0, dur, dir };
   }
 
+  /** One of the celebrations, picked at random so they never feel canned. */
+  celebrate() {
+    const options: ActionName[] = ["celebrate", "airplane", "fistpump"];
+    this.play(options[Math.floor(Math.random() * options.length)]);
+  }
+
   get busy() {
-    return this.action?.name === "kick" || this.action?.name === "dive";
+    return this.action?.name === "kick" || this.action?.name === "dive" || this.action?.name === "skid";
   }
 
   /**
    * @param speed 0 = standing, 1 = full sprint
    * @param crouch keeper's ready stance, 0..1
    */
-  update(dt: number, speed: number, time: number, crouch = 0) {
+  update(dt: number, speed: number, time: number, crouch = 0, pose: Pose = {}) {
     this.run = damp(this.run, speed, 10, dt);
     const s = this.run;
-    this.phase += dt * (5 + 8 * s);
+    this.hunch = damp(this.hunch, pose.dribble ?? 0, 6, dt);
+    const d = this.hunch;
+    // shorter, quicker steps with the ball at your feet
+    this.phase += dt * (5 + 8 * s + 2.5 * d * s);
     const sw = Math.sin(this.phase);
+
+    // footsteps: a plant each time the stride crosses over
+    if (s > 0.2 && Math.sign(sw) !== Math.sign(this.lastSw)) this.onStep?.(sw > 0 ? 0 : 1, s);
+    this.lastSw = sw;
+
+    // bank into turns, lean with acceleration, glance at the ball
+    this.roll = damp(this.roll, THREE.MathUtils.clamp(-(pose.turn ?? 0) * s * 0.07, -0.28, 0.28), 8, dt);
+    this.lean = damp(this.lean, THREE.MathUtils.clamp((pose.accel ?? 0) * 0.018, -0.18, 0.2), 6, dt);
+    const lookTarget = pose.look == null ? 0 : THREE.MathUtils.clamp(pose.look, -0.85, 0.85);
+    this.lookYaw = damp(this.lookYaw, lookTarget, 5, dt);
+
+    // idle fidgets, so standing still still feels alive
+    if (!this.action && s < 0.05 && crouch === 0) {
+      this.idleClock -= dt;
+      if (this.idleClock <= 0) {
+        this.idleClock = 5 + Math.random() * 4;
+        const fidgets: ActionName[] = ["bounce", "stretch", "bounce"];
+        this.play(fidgets[Math.floor(Math.random() * fidgets.length)]);
+      }
+    } else if (s >= 0.05) {
+      this.idleClock = 3 + Math.random() * 3;
+    }
 
     // Blink every few seconds: a quick squash of both eyes.
     this.blink -= dt;
@@ -432,21 +493,24 @@ export class Character {
     this.eyes.forEach((e) => (e.scale.y = lid));
 
     /* base pose: run cycle blended with idle */
-    const hip = [-sw * 0.85 * s - crouch * 0.45, sw * 0.85 * s - crouch * 0.45];
+    const stride = 0.85 * (1 - 0.3 * d) * (1 + 0.15 * Math.max(0, s - 0.75) * 4);
+    const lift = 1.25 + 0.35 * Math.max(0, s - 0.7) * 3.3;
+    const hip = [-sw * stride * s - crouch * 0.45 - d * 0.12, sw * stride * s - crouch * 0.45 - d * 0.12];
     const knee = [
-      Math.max(0, Math.sin(this.phase + 0.6)) * 1.25 * s + crouch * 0.8,
-      Math.max(0, Math.sin(this.phase + Math.PI + 0.6)) * 1.25 * s + crouch * 0.8,
+      Math.max(0, Math.sin(this.phase + 0.6)) * lift * s + crouch * 0.8 + d * 0.25,
+      Math.max(0, Math.sin(this.phase + Math.PI + 0.6)) * lift * s + crouch * 0.8 + d * 0.25,
     ];
     const breathe = Math.sin(time * 2.1) * (1 - s);
     const shX = [sw * 0.8 * s + breathe * 0.04, -sw * 0.8 * s + breathe * 0.04];
     const shZ = [0.1 + crouch * 0.55 + breathe * 0.02, -0.1 - crouch * 0.55 - breathe * 0.02];
     const elX = [-0.25 - 0.8 * s - crouch * 0.5, -0.25 - 0.8 * s - crouch * 0.5];
     const elZ = [0, 0];
-    let spineX = 0.16 * s + breathe * 0.02 + crouch * 0.28;
+    let spineX = 0.16 * s + breathe * 0.02 + crouch * 0.28 + this.lean + d * 0.14;
     const spineY = sw * 0.12 * s;
     let spineZ = 0;
     let bodyY = Math.abs(Math.sin(this.phase)) * 0.07 * s - crouch * 0.12;
     let bodyYaw = 0;
+    let bodyRoll = this.roll;
     // idle: a slow, easy look around
     const lookY = Math.sin(time * 0.45) * 0.22 * (1 - s);
 
@@ -515,6 +579,57 @@ export class Character {
         elX[0] = elX[1] = lerp(elX[0], -0.1, w);
       }
 
+      if (a.name === "airplane") {
+        // arms out like wings, banking left and right
+        shZ[0] = lerp(shZ[0], 1.45, w);
+        shZ[1] = lerp(shZ[1], -1.45, w);
+        shX[0] = lerp(shX[0], 0, w);
+        shX[1] = lerp(shX[1], 0, w);
+        elX[0] = elX[1] = lerp(elX[0], -0.05, w);
+        spineX = lerp(spineX, 0.28, w);
+        bodyRoll = lerp(bodyRoll, Math.sin(a.t * 3.2) * 0.32, w);
+        bodyY += Math.abs(Math.sin(a.t * 9)) * 0.05 * w;
+      }
+
+      if (a.name === "fistpump") {
+        const pump = Math.sin(a.t * 16);
+        shX[1] = lerp(shX[1], -2.3 + pump * 0.3, w);
+        elX[1] = lerp(elX[1], -1.25 + pump * 0.25, w);
+        shZ[1] = lerp(shZ[1], -0.25, w);
+        shX[0] = lerp(shX[0], 0.35, w);
+        bodyY += Math.max(0, Math.sin(p * Math.PI * 2)) * 0.18 * w;
+        spineX = lerp(spineX, -0.1, w);
+      }
+
+      if (a.name === "stretch") {
+        const up = Math.sin(p * Math.PI);
+        shX[0] = lerp(shX[0], -2.9 * up, w);
+        shX[1] = lerp(shX[1], -2.9 * up, w);
+        elX[0] = elX[1] = lerp(elX[0], -0.1, w);
+        spineX = lerp(spineX, -0.12 * up, w);
+        bodyY += up * 0.03;
+      }
+
+      if (a.name === "bounce") {
+        const b = Math.abs(Math.sin(a.t * 9));
+        bodyY += b * 0.06 * w;
+        knee[0] = lerp(knee[0], 0.25 * (1 - b), w);
+        knee[1] = lerp(knee[1], 0.25 * (1 - b), w);
+        shZ[0] = lerp(shZ[0], 0.25, w);
+        shZ[1] = lerp(shZ[1], -0.25, w);
+      }
+
+      if (a.name === "skid") {
+        spineX = lerp(spineX, -0.28, w);
+        knee[0] = lerp(knee[0], 0.6, w);
+        knee[1] = lerp(knee[1], 0.6, w);
+        hip[0] = lerp(hip[0], -0.5, w);
+        hip[1] = lerp(hip[1], 0.25, w);
+        shZ[0] = lerp(shZ[0], 0.9, w);
+        shZ[1] = lerp(shZ[1], -0.9, w);
+        bodyY -= 0.08 * w;
+      }
+
       if (p >= 1) this.action = null;
     }
 
@@ -526,9 +641,11 @@ export class Character {
       this.elbows[i].rotation.set(elX[i], 0, elZ[i]);
     }
     this.spine.rotation.set(spineX, spineY, spineZ);
-    this.head.rotation.set(-spineX * 0.6, -spineY * 0.8 + lookY, -spineZ * 0.5);
+    // glance at the ball when there is one nearby, otherwise look about idly
+    const glance = pose.look == null ? lookY : this.lookYaw;
+    this.head.rotation.set(-spineX * 0.6, -spineY * 0.8 + glance, -spineZ * 0.5);
     this.body.position.y = bodyY;
-    this.body.rotation.y = bodyYaw;
+    this.body.rotation.set(0, bodyYaw, bodyRoll);
   }
 
   dispose() {

@@ -114,6 +114,15 @@ export function Minimap({
         }
       });
 
+      // golden stars still out there
+      ctx.fillStyle = "#ffd24a";
+      for (const st of s.stars) {
+        if (st.taken) continue;
+        ctx.beginPath();
+        ctx.arc(mx(st.x), mz(st.z), 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
       // keeper
       ctx.fillStyle = "#ff5c3d";
       ctx.beginPath();

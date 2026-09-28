@@ -69,6 +69,20 @@ export const CONTACT = {
 /** Easter egg: a rack of bowling pins east of the spawn. */
 export const PINS = { x: 13, z: 12, label: { x: 15.2, z: 16.4 } } as const;
 
+/** Hidden golden stars: the corners, the edges, the gaps between missions. */
+export const STARS: P[] = [
+  { x: -46, z: -32 },
+  { x: 46, z: -32 },
+  { x: -46, z: 32 },
+  { x: 46, z: 32 },
+  { x: -20, z: 30 },
+  { x: 22, z: 30 },
+  { x: -24, z: 8 },
+  { x: 18, z: -6 },
+  { x: -8, z: -30 },
+  { x: 30, z: -34 },
+];
+
 /** Where the guide beacon points for each zone. */
 export const ZONE_ANCHORS: Record<string, P> = {
   about: ABOUT.ball,

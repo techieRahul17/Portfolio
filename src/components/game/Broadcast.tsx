@@ -1,11 +1,11 @@
 "use client";
 
 import { useRef } from "react";
-import { Award, Briefcase, Layers, Mail, Target, User } from "lucide-react";
+import { Award, Briefcase, Layers, Mail, Star, Target, User } from "lucide-react";
 import { gsap, useGSAP } from "@/lib/gsap";
 import { mono } from "./Hud";
 
-export type Banner = { kind: "goal" | "save" | "bullseye" | "strike"; key: number; minute: number };
+export type Banner = { kind: "goal" | "save" | "bullseye" | "strike" | "stars"; key: number; minute: number };
 export type Note = { key: number; title: string; zone: string };
 
 const COPY: Record<Banner["kind"], { title: string; sub: (m: number) => string; bands: [string, string] }> = {
@@ -13,6 +13,7 @@ const COPY: Record<Banner["kind"], { title: string; sub: (m: number) => string; 
   save: { title: "SAVED", sub: () => "Hold longer — full power beats the keeper", bands: ["#ff5c3d", "#15151f"] },
   bullseye: { title: "BULLSEYE", sub: () => "Project unlocked", bands: ["#e8ff4f", "#6e5bff"] },
   strike: { title: "STRIKE", sub: () => "All ten pins down", bands: ["#e8ff4f", "#ff5c3d"] },
+  stars: { title: "ALL STARS", sub: () => "Every hidden star found", bands: ["#ffd24a", "#6e5bff"] },
 };
 
 const ZONE_ICON: Record<string, typeof User> = {
@@ -22,6 +23,7 @@ const ZONE_ICON: Record<string, typeof User> = {
   skills: Layers,
   trophies: Award,
   contact: Mail,
+  star: Star,
 };
 
 /** Big broadcast moments: a TV-graphics sweep across the pitch. */

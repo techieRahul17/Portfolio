@@ -9,7 +9,7 @@ import {
   targetTexture,
   type Line,
 } from "./textures";
-import { ABOUT, CONTACT, EXPERIENCE, GOAL, PINS, SKILLS, TROPHIES, WORK } from "./layout";
+import { ABOUT, CONTACT, EXPERIENCE, GOAL, PINS, SKILLS, STARS, TROPHIES, WORK } from "./layout";
 
 const ACID = "#e8ff4f";
 const VIOLET = "#6e5bff";
@@ -34,7 +34,14 @@ export type Gate = { x: number; strip: THREE.Mesh; done: boolean };
  * every interactive prop the zones need. Returns handles for the engine and
  * the static colliders for the physics.
  */
-export function buildWorld(scene: THREE.Scene, o: WorldOptions) {
+/** Hand the main thread back to the browser for a moment (works in hidden tabs too). */
+const breathe = () => new Promise<void>((r) => setTimeout(r, 0));
+
+/**
+ * Async so the build can pause between heavy sections: the loading screen
+ * keeps animating instead of freezing while the stadium goes up.
+ */
+export async function buildWorld(scene: THREE.Scene, o: WorldOptions) {
   const colliders: Collider[] = [];
   const disposables: { dispose(): void }[] = [];
   const track = <T extends { dispose(): void }>(d: T) => (disposables.push(d), d);
@@ -124,6 +131,8 @@ export function buildWorld(scene: THREE.Scene, o: WorldOptions) {
   grass.receiveShadow = true;
   scene.add(grass);
 
+  await breathe();
+
   /* ======================================================= floor lettering */
   const paint = (lines: Line[], x: number, z: number, width: number, px = 1024) => {
     const { texture, aspect } = floorText(lines, px);
@@ -196,6 +205,8 @@ export function buildWorld(scene: THREE.Scene, o: WorldOptions) {
   zoneLabel("CONTACT", "Step on the pad", CONTACT.label.x, CONTACT.label.z, 11);
   zoneLabel("STRIKE", "Knock all ten down", PINS.label.x, PINS.label.z, 8);
 
+  await breathe();
+
   /* ====================================================== stands + crowd */
   const standMats = [toon("#15151f"), toon("#1b1b28")];
   const seats: THREE.Vector3[] = [];
@@ -264,7 +275,22 @@ export function buildWorld(scene: THREE.Scene, o: WorldOptions) {
     });
     crowd.frustumCulled = false;
     scene.add(crowd);
+
+    // Heads, bobbing with the same shader (they share the instance positions).
+    const headGeo = track(new THREE.SphereGeometry(0.15, 8, 6));
+    headGeo.translate(0, 0.9, 0);
+    const heads = new THREE.InstancedMesh(headGeo, mat, seats.length);
+    const skins = ["#5a3a28", "#8a5a3c", "#b07a55", "#d8a680", "#3a2418"].map((c) => new THREE.Color(c));
+    seats.forEach((p, i) => {
+      m4.makeTranslation(p.x, p.y, p.z);
+      heads.setMatrixAt(i, m4);
+      heads.setColorAt(i, skins[Math.floor(Math.random() * skins.length)]);
+    });
+    heads.frustumCulled = false;
+    scene.add(heads);
   }
+
+  await breathe();
 
   /* ========================================================== LED boards */
   const boards: THREE.Texture[] = [];
@@ -358,6 +384,8 @@ export function buildWorld(scene: THREE.Scene, o: WorldOptions) {
     scene.add(beam);
   }
 
+  await breathe();
+
   /* =============================================================== goals */
   const white = toon("#f4f4f6");
   const netMat = track(new THREE.LineBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.32 }));
@@ -371,6 +399,7 @@ export function buildWorld(scene: THREE.Scene, o: WorldOptions) {
     return new THREE.LineSegments(g, netMat);
   };
 
+  const netSprings: { side: number; nets: THREE.Group; x: number; v: number }[] = [];
   const makeGoal = (side: 1 | -1) => {
     const gx = side * GOAL.lineX;
     const hw = GOAL.halfWidth;
@@ -390,21 +419,27 @@ export function buildWorld(scene: THREE.Scene, o: WorldOptions) {
     bar.castShadow = true;
     g.add(bar);
 
+    // Nets live in their own group anchored on the goal line, so scaling it
+    // along X makes the whole net billow outward when the ball hits.
+    const nets = new THREE.Group();
+    nets.position.set(gx, 0, 0);
     const backNet = netGrid(hw * 2, GOAL.height, 0.3);
-    backNet.position.set(back, 0, 0);
+    backNet.position.set(side * GOAL.depth, 0, 0);
     backNet.rotation.y = Math.PI / 2;
-    g.add(backNet);
+    nets.add(backNet);
     for (const s of [-1, 1]) {
       const sideNet = netGrid(GOAL.depth, GOAL.height, 0.3);
-      sideNet.position.set((gx + back) / 2, 0, s * hw);
-      g.add(sideNet);
+      sideNet.position.set((side * GOAL.depth) / 2, 0, s * hw);
+      nets.add(sideNet);
     }
     // Built upright (depth × width), then laid flat: local +Y becomes −Z.
     const roof = netGrid(GOAL.depth, hw * 2, 0.3);
     roof.rotation.x = -Math.PI / 2;
-    roof.position.set((gx + back) / 2, GOAL.height, hw);
-    g.add(roof);
+    roof.position.set((side * GOAL.depth) / 2, GOAL.height, hw);
+    nets.add(roof);
+    g.add(nets);
     scene.add(g);
+    netSprings.push({ side, nets, x: 0, v: 0 });
 
     const lo = Math.min(gx, back);
     const hi = Math.max(gx, back);
@@ -487,6 +522,8 @@ export function buildWorld(scene: THREE.Scene, o: WorldOptions) {
     (t.ring.material as THREE.MeshBasicMaterial).color.set("#ffffff");
   };
 
+  await breathe();
+
   /* ============================================================= skills */
   const orbGeo = track(new THREE.IcosahedronGeometry(0.5, 0));
   const glowGeo = track(new THREE.SphereGeometry(0.9, 16, 12));
@@ -568,8 +605,48 @@ export function buildWorld(scene: THREE.Scene, o: WorldOptions) {
     return m;
   };
 
+  /* ============================================================== stars */
+  const starShape = new THREE.Shape();
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2 + Math.PI / 2;
+    const r = i % 2 === 0 ? 0.42 : 0.18;
+    if (i === 0) starShape.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+    else starShape.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  starShape.closePath();
+  const starGeo = track(new THREE.ExtrudeGeometry(starShape, { depth: 0.1, bevelEnabled: true, bevelSize: 0.04, bevelThickness: 0.04, bevelSegments: 2 }));
+  starGeo.center();
+  const starMat = toon("#ffd24a", { emissive: "#6a4a00" });
+  const starGlow = track(
+    new THREE.SpriteMaterial({
+      map: track(glowTexture()),
+      color: "#ffd24a",
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }),
+  );
+  const stars = STARS.map((p, i) => {
+    const group = new THREE.Group();
+    group.position.set(p.x, 1.1, p.z);
+    const star = new THREE.Mesh(starGeo, starMat);
+    star.castShadow = true;
+    const glow = new THREE.Sprite(starGlow);
+    glow.scale.setScalar(2.2);
+    glow.renderOrder = 7;
+    group.add(star, glow);
+    scene.add(group);
+    return { x: p.x, z: p.z, group, taken: false, t: i * 0.7 };
+  });
+
   return {
     colliders,
+    stars,
+    /** Kick the net on the given side (−1 west, 1 east) so it billows. */
+    bulgeNet(side: number, strength = 1) {
+      const n = netSprings.find((s) => s.side === side);
+      if (n) n.v += 2.6 * strength;
+    },
     uniforms,
     sun,
     targets,
@@ -595,6 +672,18 @@ export function buildWorld(scene: THREE.Scene, o: WorldOptions) {
         t.pulse = Math.max(0, t.pulse - dt * 1.8);
         t.ring.scale.setScalar(1 + t.pulse * 0.35);
       }
+      for (const st of stars) {
+        if (st.taken) continue;
+        st.t += dt;
+        st.group.position.y = 1.1 + Math.sin(st.t * 2) * 0.15;
+        st.group.children[0].rotation.y = st.t * 2.2;
+      }
+      // damped spring: nets billow out, overshoot a touch, settle
+      for (const n of netSprings) {
+        n.v += (-60 * n.x - 7 * n.v) * dt;
+        n.x += n.v * dt;
+        n.nets.scale.x = 1 + Math.max(-0.1, n.x) * 0.35;
+      }
     },
     dispose() {
       disposables.forEach((d) => d.dispose());
@@ -602,4 +691,20 @@ export function buildWorld(scene: THREE.Scene, o: WorldOptions) {
   };
 }
 
-export type World = ReturnType<typeof buildWorld>;
+export type World = Awaited<ReturnType<typeof buildWorld>>;
+
+/** Soft radial glow for sprites. */
+function glowTexture() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const ctx = c.getContext("2d")!;
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, "rgba(255,255,255,0.9)");
+  g.addColorStop(0.35, "rgba(255,255,255,0.25)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}

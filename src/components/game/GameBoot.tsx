@@ -1,22 +1,45 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, Check, Volume2, VolumeX } from "lucide-react";
 import { gsap, useGSAP } from "@/lib/gsap";
 import { profile } from "@/data/profile";
 import type { ZoneDef } from "@/lib/game/engine";
 import { BallIcon, Key } from "./icons";
 import { mono } from "./Hud";
+import { KeepieUppie } from "./KeepieUppie";
+
+/** What the loader claims to be doing. Only some of it is true. */
+const LOADING_LINES = [
+  "Inflating the ball to regulation pressure",
+  "Mowing 64,000 blades of grass by hand",
+  "Convincing the goalkeeper to show up",
+  "Ironing the number 17 shirt",
+  "Teaching the crowd to do the wave",
+  "Painting the lines (slightly wobbly)",
+  "Negotiating with the floodlights",
+  "Hiding ten golden stars",
+  "Stretching the hamstrings",
+  "Checking VAR. It's fine.",
+];
+
+const TIPS = [
+  "Pro tip: hold Space longer. The keeper hates that.",
+  "Pro tip: there are ten golden stars. Almost nobody finds all ten.",
+  "Pro tip: run into the bowling pins. Trust me.",
+  "Warning: may contain hat-tricks.",
+  "Pro tip: reverse hard at full sprint for a skid.",
+];
 
 /**
- * Two screens in one. While the stadium builds: a black loader with real
- * progress. Once it's ready the black lifts off the orbiting stadium and the
- * title menu slides in.
+ * Two screens in one. While the stadium builds: a loader you can play — a
+ * keepie-uppie, a pitch-shaped progress bar and a lot of nonsense. Once it's
+ * ready the ball scores, the black lifts off the orbiting stadium and the
+ * title menu slides in. Mid-juggle? It waits for you.
  */
 export function GameBoot({
   progress,
-  label,
   ready,
   failed,
   zones,
@@ -25,6 +48,7 @@ export function GameBoot({
   touch,
   onMute,
   onStart,
+  onHover,
 }: {
   progress: number;
   label: string;
@@ -36,38 +60,89 @@ export function GameBoot({
   touch: boolean;
   onMute: () => void;
   onStart: () => void;
+  /** The avatar reacts when you eye up the Kick off button. */
+  onHover?: () => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
-  const bar = useRef<HTMLDivElement>(null);
+  const ballRef = useRef<HTMLDivElement>(null);
+  const fillRef = useRef<HTMLDivElement>(null);
   const pct = useRef<HTMLSpanElement>(null);
   const shown = useRef({ v: 0 });
+  const [line, setLine] = useState(0);
+  const [tip, setTip] = useState(0);
+  const [juggling, setJuggling] = useState(false);
+  const [lifted, setLifted] = useState(false);
 
-  /* Ease the bar toward the real progress, so steps never jump. */
+  /* Ease the bar toward the real progress; the ball rolls along with it. */
   useEffect(() => {
     const tween = gsap.to(shown.current, {
       v: progress,
-      duration: 0.6,
+      duration: 0.7,
       ease: "power2.out",
       onUpdate: () => {
         const v = shown.current.v;
-        if (bar.current) bar.current.style.transform = `scaleX(${v})`;
+        if (fillRef.current) fillRef.current.style.transform = `scaleX(${v})`;
+        if (ballRef.current) {
+          ballRef.current.style.left = `calc(${v * 100}% - ${v * 28}px)`;
+          ballRef.current.style.transform = `rotate(${v * 900}deg)`;
+        }
         if (pct.current) pct.current.textContent = String(Math.round(v * 100)).padStart(3, "0");
       },
     });
     return () => void tween.kill();
   }, [progress]);
 
+  /* The loader's running commentary. */
+  useEffect(() => {
+    const id = setInterval(() => setLine((l) => (l + 1) % LOADING_LINES.length), 1500);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => {
+    if (!lifted) return;
+    const id = setInterval(() => setTip((t) => (t + 1) % TIPS.length), 3600);
+    return () => clearInterval(id);
+  }, [lifted]);
+
+  /* Ready and not mid-juggle: give the goal a beat, then lift. */
+  useEffect(() => {
+    if (!ready || juggling || lifted) return;
+    const id = setTimeout(() => setLifted(true), 1400);
+    return () => clearTimeout(id);
+  }, [ready, juggling, lifted]);
+
+  const lift = useCallback(() => ready && setLifted(true), [ready]);
+
+  /* Enter: lift the loader when ready, then kick off from the title. */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "Enter") return;
+      e.preventDefault();
+      if (!lifted) lift();
+      else onStart();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lifted, lift, onStart]);
+
   useGSAP(
     () => {
       if (!ready) return;
-      gsap
-        .timeline({ delay: 0.35 })
-        .to("[data-loader]", { autoAlpha: 0, duration: 0.5, ease: "power2.in" })
-        .to("[data-blackout]", { autoAlpha: 0, duration: 1.2, ease: "power2.inOut" }, "-=0.1")
-        .from("[data-title] > *", { y: 40, opacity: 0, duration: 0.9, stagger: 0.07, ease: "voltage" }, "-=0.8")
-        .from("[data-side] > *", { x: 40, opacity: 0, duration: 0.8, stagger: 0.08, ease: "voltage" }, "<0.1");
+      gsap.fromTo("[data-goal]", { scale: 0.6, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.5, ease: "back.out(2.5)" });
     },
     { scope: root, dependencies: [ready] },
+  );
+
+  useGSAP(
+    () => {
+      if (!lifted) return;
+      gsap
+        .timeline()
+        .to("[data-loader]", { autoAlpha: 0, y: -20, duration: 0.45, ease: "power2.in" })
+        .to("[data-blackout]", { autoAlpha: 0, duration: 1.1, ease: "power2.inOut" }, "-=0.1")
+        .from("[data-title] > *", { y: 40, opacity: 0, duration: 0.9, stagger: 0.07, ease: "voltage" }, "-=0.75")
+        .from("[data-side] > *", { x: 40, opacity: 0, duration: 0.8, stagger: 0.08, ease: "voltage" }, "<0.1");
+    },
+    { scope: root, dependencies: [lifted] },
   );
 
   const total = zones.reduce((n, z) => n + z.ids.length, 0);
@@ -107,8 +182,10 @@ export function GameBoot({
             <div className="mt-9 flex flex-wrap items-center gap-3">
               <button
                 onClick={onStart}
+                onPointerEnter={onHover}
+                onFocus={onHover}
                 disabled={!ready}
-                className="bg-accent text-accent-ink group relative inline-flex items-center gap-3 overflow-hidden rounded-full py-2 pr-2 pl-7 text-base font-semibold transition-transform hover:scale-[1.03] disabled:opacity-50"
+                className="bg-accent text-accent-ink group relative inline-flex items-center gap-3 overflow-hidden rounded-full py-2 pr-2 pl-7 text-base font-semibold shadow-[0_0_40px_-8px_rgba(232,255,79,0.6)] transition-transform hover:scale-[1.04] disabled:opacity-50"
               >
                 <span className="absolute inset-0 -translate-x-full bg-white/30 transition-transform duration-700 group-hover:translate-x-full" />
                 {got > 0 && got < total ? "Continue match" : "Kick off"}
@@ -130,6 +207,9 @@ export function GameBoot({
                 </span>
               )}
             </div>
+            <p key={tip} className="text-faint mt-5 animate-[fadeUp_0.5s_var(--ease-out)] text-sm">
+              {TIPS[tip]}
+            </p>
             {failed && (
               <p className="text-accent-3 mt-4 text-sm">
                 This device couldn&apos;t start WebGL — the{" "}
@@ -197,22 +277,51 @@ export function GameBoot({
         </div>
       </div>
 
-      {/* ------------------------------------------------- blackout + loader */}
-      <div data-blackout className="bg-bg absolute inset-0 grid place-items-center">
-        <div data-loader className="w-[min(26rem,80vw)]">
+      {/* ------------------------------------------------- loader */}
+      <div data-blackout className="bg-bg absolute inset-0 grid place-items-center overflow-y-auto p-5">
+        <div data-loader className="w-[min(28rem,100%)]">
           <p className={`${mono} text-faint text-center text-[0.6rem]`}>The portfolio match</p>
-          <p className="font-display mt-3 text-center text-5xl font-medium tracking-[-0.04em]">
+          <p className="font-display mt-2 text-center text-4xl font-medium tracking-[-0.04em] sm:text-5xl">
             RAHUL <span className="text-accent">V S</span>
           </p>
-          <div className="bg-line mt-10 h-px overflow-hidden">
-            <div ref={bar} className="bg-accent h-px origin-left" style={{ transform: "scaleX(0)" }} />
+
+          <div className="mt-8">
+            <KeepieUppie muted={muted} onStreakChange={setJuggling} />
           </div>
-          <div className={`${mono} text-faint mt-3 flex justify-between text-[0.58rem]`}>
-            <span>{failed ? "WebGL unavailable" : label}</span>
-            <span className="text-fg tabular-nums">
+
+          {/* progress: a little pitch, the ball dribbling to goal */}
+          <div className="relative mt-7 h-9 rounded-md border border-[#2f6b3c] bg-[#123a1c]">
+            <div ref={fillRef} className="absolute inset-y-0 left-0 w-full origin-left bg-[#1b5a2a]" style={{ transform: "scaleX(0)" }} />
+            <span className="absolute inset-y-1 left-1/2 w-px bg-white/25" />
+            <span className="absolute top-1/2 left-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/25" />
+            <span className="absolute inset-y-2 left-0 w-2 border border-l-0 border-white/30" />
+            <span className="absolute inset-y-2 right-0 w-2 border border-r-0 border-white/60 bg-white/10" />
+            <div ref={ballRef} className="text-fg absolute top-1/2 -mt-[10px] ml-1 h-5 w-5" style={{ left: "0%" }}>
+              <BallIcon className="h-5 w-5" />
+            </div>
+          </div>
+          <div className={`${mono} mt-3 flex items-center justify-between gap-3 text-[0.58rem]`}>
+            <span key={ready ? "ready" : line} className="text-faint animate-[fadeUp_0.35s_var(--ease-out)] truncate">
+              {failed ? "WebGL unavailable" : ready ? "Stadium ready" : LOADING_LINES[line]}
+            </span>
+            <span className="text-fg shrink-0 tabular-nums">
               <span ref={pct}>000</span>%
             </span>
           </div>
+
+          {ready && (
+            <div data-goal className="mt-6 flex flex-col items-center gap-3">
+              <p className="font-display text-accent text-2xl font-semibold tracking-[-0.02em] italic">GOAL. We&apos;re live.</p>
+              {juggling && (
+                <button
+                  onClick={lift}
+                  className="bg-accent text-accent-ink rounded-full px-5 py-2.5 text-sm font-semibold transition-transform hover:scale-[1.04]"
+                >
+                  Enter the stadium {!touch && <span className="opacity-60">(Enter)</span>}
+                </button>
+              )}
+            </div>
+          )}
           {failed && (
             <Link href="/portfolio" className="text-accent mt-8 block text-center text-sm underline">
               Open the classic portfolio instead

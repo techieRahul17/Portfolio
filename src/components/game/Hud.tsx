@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUpRight, BookOpen, Menu, Volume2, VolumeX } from "lucide-react";
+import { ArrowUpRight, BookOpen, Menu, Star, Volume2, VolumeX } from "lucide-react";
 import { profile } from "@/data/profile";
 import type { Game, ZoneDef } from "@/lib/game/engine";
 import { ZONE_ANCHORS } from "@/lib/game/layout";
@@ -24,6 +24,7 @@ export function Hud({
   zones,
   unlocked,
   score,
+  stars,
   muted,
   touch,
   onMute,
@@ -34,6 +35,7 @@ export function Hud({
   zones: ZoneDef[];
   unlocked: Set<string>;
   score: { goals: number; saves: number };
+  stars: { count: number; total: number };
   muted: boolean;
   touch: boolean;
   onMute: () => void;
@@ -128,6 +130,13 @@ export function Hud({
               unlocked
             </p>
           </div>
+          <span
+            className="border-line-strong ml-1 flex items-center gap-1 rounded-full border px-2 py-1 font-mono text-[0.6rem] tabular-nums"
+            title="Golden stars"
+          >
+            <Star className="h-3 w-3 fill-[#ffd24a] text-[#ffd24a]" />
+            {stars.count}/{stars.total}
+          </span>
         </div>
 
         {/* scoreboard */}

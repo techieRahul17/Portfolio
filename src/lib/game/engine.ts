@@ -10,6 +10,7 @@ import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
 import { Confetti, Dust, Trails, chargeRing } from "./effects";
 import { ABOUT, CONTACT, EXPERIENCE, GOAL, PINS, SKILLS, SPAWN, TROPHIES, WORK, ZONE_ANCHORS } from "./layout";
 import { Pins } from "./pins";
+import { createGrass } from "./grass";
 import { Ball, circle, penetration, type Collider } from "./physics";
 import { footballTexture, toonRamp } from "./textures";
 import { buildWorld } from "./world";
@@ -22,6 +23,8 @@ export type GameConfig = {
   projects: { id: string; title: string }[];
   skills: { id: string; title: string }[];
   unlocked: string[];
+  /** Indices of golden stars already collected (restored from storage). */
+  stars?: number[];
   touch: boolean;
   onReady: () => void;
   onProgress?: (progress: number, label: string) => void;
@@ -35,7 +38,8 @@ export type GameEvent =
   | { type: "save" }
   | { type: "bullseye" }
   | { type: "unlock"; id: string; fresh: boolean }
-  | { type: "strike" };
+  | { type: "strike" }
+  | { type: "star"; index: number; count: number; total: number };
 
 /** Live state the HUD polls each frame (minimap, prompts, mission tracker). */
 export type Snapshot = {
@@ -54,11 +58,13 @@ export type Snapshot = {
   playTime: number;
   keeperZ: number;
   balls: { x: number; z: number }[];
+  /** Golden stars still out there. */
+  stars: { x: number; z: number; taken: boolean }[];
   started: boolean;
   paused: boolean;
 };
 
-export type Game = ReturnType<typeof createGame>;
+export type Game = Awaited<ReturnType<typeof createGame>>;
 
 const PLAYER_KIT: Kit = {
   skin: "#8f5c3e",
@@ -95,7 +101,14 @@ const SPRINT = 10;
 const damp = (a: number, b: number, rate: number, dt: number) => a + (b - a) * (1 - Math.exp(-rate * dt));
 const angleDelta = (a: number, b: number) => Math.atan2(Math.sin(b - a), Math.cos(b - a));
 
-export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
+/** Hand the main thread back between build phases (works in hidden tabs too). */
+const breathe = () => new Promise<void>((r) => setTimeout(r, 0));
+
+/**
+ * Builds the stadium and starts the game. Async so the build yields between
+ * phases: the loading screen stays smooth and the page never locks up.
+ */
+export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
   const touch = config.touch;
   const lowPower = touch || (navigator.hardwareConcurrency ?? 8) <= 4;
 
@@ -115,11 +128,12 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
   // multisampled half-float target would be neater, but some Direct3D drivers
   // render it solid black.)
   let composer: EffectComposer | null = lowPower ? null : new EffectComposer(renderer);
+  const smaa = new SMAAPass();
   if (composer) {
     composer.addPass(new RenderPass(scene, camera));
     composer.addPass(new UnrealBloomPass(new THREE.Vector2(512, 512), 0.55, 0.5, 0.86));
     composer.addPass(new OutputPass());
-    composer.addPass(new SMAAPass());
+    composer.addPass(smaa);
   }
 
   /**
@@ -127,7 +141,6 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
    * drop it and render directly. Checked on the first frames only — the sky
    * and the pitch are never pure black, so all-zero pixels mean it failed.
    */
-  let composerChecks = 3;
   function composerLooksBroken() {
     const gl = renderer.getContext();
     const w = gl.drawingBufferWidth;
@@ -165,7 +178,9 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
   const audio = createAudio();
 
   config.onProgress?.(0.7, "Filling the stands");
-  const world = buildWorld(scene, {
+  await breathe();
+  performance.mark("rvs:world-start");
+  const world = await buildWorld(scene, {
     ramp,
     anisotropy: renderer.capabilities.getMaxAnisotropy(),
     lowPower,
@@ -180,9 +195,20 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
   const idsOf = (zone: string) => zoneById.get(zone)?.ids ?? [];
 
   /* ================================================================ player */
+  performance.measure("rvs:world", "rvs:world-start");
+  await breathe();
   const player = new Character(PLAYER_KIT);
   scene.add(player.root);
   const pos = new THREE.Vector3(SPAWN.x, 0, SPAWN.z);
+  let skidCooldown = 0;
+  // Every foot plant: a soft step, and a puff of turf when really running.
+  player.onStep = (foot, s) => {
+    audio.step(s);
+    if (s > 0.55) {
+      const side = foot === 0 ? 1 : -1;
+      dust.emit(pos.x + Math.cos(yaw) * 0.12 * side, pos.z - Math.sin(yaw) * 0.12 * side, s > 0.85 ? 2 : 1);
+    }
+  };
   const vel = new THREE.Vector3();
   let yaw = Math.PI; // facing north
   player.root.position.copy(pos);
@@ -207,7 +233,11 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
   let keeperDived = false;
 
   const colliders: Collider[] = [...world.colliders, keeperCol];
+  /** The player as a collider for ball contact, moved each frame (not re-created). */
+  const playerBody = circle(0, 0, PLAYER_R, 2) as Extract<Collider, { kind: "circle" }>;
   const pins = new Pins(scene, ramp, colliders, PINS.x, PINS.z);
+  const grass = createGrass(lowPower ? { count: 22000, radius: 10 } : { count: 64000, radius: 13 });
+  scene.add(grass.mesh);
 
   /* ================================================================= balls */
   const ballMat = new THREE.MeshToonMaterial({ map: footballTexture(), gradientMap: ramp });
@@ -220,6 +250,7 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
     new Ball("trophies", TROPHIES.ball.x, TROPHIES.ball.z, ballMat, { onBounce: bounceSound }),
   ];
   balls.forEach((b) => scene.add(b.mesh));
+  await breathe();
   const trails = new Trails(balls.length);
   trails.points.renderOrder = 6;
   scene.add(trails.points);
@@ -298,6 +329,13 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
     m.opacity = 0.95;
   };
   syncProps();
+  for (const i of config.stars ?? []) {
+    const st = world.stars[i];
+    if (st) {
+      st.taken = true;
+      st.group.visible = false;
+    }
+  }
 
   /* ================================================================= input */
   const keys = new Set<string>();
@@ -362,7 +400,7 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
     const fresh = !unlocked.has(id);
     unlocked.add(id);
     config.onEvent({ type: "unlock", id, fresh });
-    player.play("celebrate");
+    player.celebrate();
     if (at) confetti.burst(at.x, at.y + 0.5, at.z, fresh ? 170 : 60);
     if (fresh) {
       audio.unlockChime();
@@ -453,7 +491,7 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
 
     if (!best) {
       const s = 9 + 17 * power;
-      return { vx: facing.x * s, vy: 1 + 5.5 * power * power, vz: facing.z * s };
+      return { vx: facing.x * s, vy: 1 + 5.5 * power * power, vz: facing.z * s, assisted: false };
     }
     const dx = best.x - ball.pos.x;
     const dz = best.z - ball.pos.z;
@@ -461,7 +499,7 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
     const s = 14 + 12 * power;
     const T = d / s;
     const vy = Math.min(13, (best.y - ball.r + 0.5 * 20 * T * T) / T);
-    return { vx: (dx / d) * s, vy, vz: (dz / d) * s };
+    return { vx: (dx / d) * s, vy, vz: (dz / d) * s, assisted: true };
   }
 
   function strike(power: number) {
@@ -494,6 +532,8 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
     audio.kick(power);
     dust.emit(target.pos.x, target.pos.z, 6);
     shake = 0.12 + power * 0.25;
+    // A big, aimed shot gets the broadcast treatment: the camera rides with it.
+    if (v.assisted && power > 0.7 && !lowPower) shotCam = { ball: target, t: 0 };
   }
 
   function resetNearestBall() {
@@ -545,8 +585,13 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
   const followLook = new THREE.Vector3();
   const orbitPos = new THREE.Vector3();
   const orbitLook = new THREE.Vector3(0, 0, 0);
+  // scratch vectors: the camera runs every frame and must not allocate
+  const _camA = new THREE.Vector3();
+  const _camB = new THREE.Vector3();
 
   const portrait = () => canvas.clientHeight > canvas.clientWidth;
+
+  let shotCam: { ball: Ball; t: number } | null = null;
 
   /** Dev-only: pin the camera somewhere specific (for inspecting the avatar). */
   let debugCam: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null;
@@ -566,9 +611,23 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
     followPos.set(pos.x + vel.x * lead, 8.2 * z, pos.z + 9.6 * z + vel.z * lead);
     followLook.set(pos.x + vel.x * lead, 0.9, pos.z - 1.6 + vel.z * lead);
 
+    // Shot cam: ease onto the ball in flight, hold, ease back to the player.
+    if (shotCam) {
+      shotCam.t += dt;
+      const e = shotCam.t / 1.6;
+      const w = Math.min(1, e / 0.2, (1 - e) / 0.35);
+      if (e >= 1) shotCam = null;
+      else if (w > 0) {
+        const bp = shotCam.ball.pos;
+        const k = w * w * (3 - 2 * w);
+        followPos.lerp(_camA.set(bp.x - 2.5, 3.4, bp.z + 6.2), k);
+        followLook.lerp(_camB.set(bp.x, bp.y * 0.5 + 0.6, bp.z - 2), k);
+      }
+    }
+
     const t = camBlend * camBlend * (3 - 2 * camBlend);
-    const targetPos = orbitPos.clone().lerp(followPos, t);
-    const targetLook = orbitLook.clone().lerp(followLook, t);
+    const targetPos = _camA.copy(orbitPos).lerp(followPos, t);
+    const targetLook = _camB.copy(orbitLook).lerp(followLook, t);
     const rate = camBlend >= 1 ? 5 : 30;
     camPos.set(damp(camPos.x, targetPos.x, rate, dt), damp(camPos.y, targetPos.y, rate, dt), damp(camPos.z, targetPos.z, rate, dt));
     camLook.set(damp(camLook.x, targetLook.x, rate, dt), damp(camLook.y, targetLook.y, rate, dt), damp(camLook.z, targetLook.z, rate, dt));
@@ -589,10 +648,10 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
   const sunRight = new THREE.Vector3().crossVectors(sunFwd, new THREE.Vector3(0, 1, 0)).normalize();
   const sunUp = new THREE.Vector3().crossVectors(sunRight, sunFwd).normalize();
   const shadowCam = world.sun.shadow.camera;
-  const texel = (shadowCam.right - shadowCam.left) / world.sun.shadow.mapSize.x;
   const centre = new THREE.Vector3();
 
   function snapShadow(x: number, z: number) {
+    const texel = (shadowCam.right - shadowCam.left) / world.sun.shadow.mapSize.x;
     centre.set(x, 0, z);
     const r = centre.dot(sunRight);
     const u = centre.dot(sunUp);
@@ -622,15 +681,7 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
     slowMo = Math.max(0, slowMo - dt);
     const scale = slowMo > 0 ? 0.3 + 0.7 * Math.pow(1 - Math.min(slowMo, 0.9) / 0.9, 3) : 1;
     step(dt * scale);
-    if (composer) {
-      composer.render();
-      if (composerChecks > 0 && --composerChecks === 0 && composerLooksBroken()) {
-        dropComposer();
-        renderer.render(scene, camera);
-      }
-    } else {
-      renderer.render(scene, camera);
-    }
+    render();
 
     if (!ready) {
       ready = true;
@@ -638,16 +689,23 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
       config.onReady();
     }
 
-    // Can't hold ~40fps? Trade resolution for smoothness, once.
-    if (frames < 200 && started) {
+    // Can't hold ~40fps? Trade resolution for smoothness, once. Measured only
+    // once play has settled (not during the fly-in), over ~5 seconds, and only
+    // on sustained slowness — a one-off hitch must never trigger it.
+    if (started && playTime > 3 && frames < 300) {
       frames++;
       if (dt > 0.026) slow++;
-      if (frames === 200 && slow > 110 && dpr > 1) {
+      if (frames === 300 && slow > 200 && dpr > 1) {
         dpr = 1;
         renderer.setPixelRatio(1);
         resize();
       }
     }
+  }
+
+  function render() {
+    if (composer) composer.render();
+    else renderer.render(scene, camera);
   }
 
   function step(dt: number) {
@@ -659,6 +717,17 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
     const max = input.sprint ? SPRINT : WALK;
     const tx = input.x * max;
     const tz = input.z * max;
+    const prevYaw = yaw;
+    const prevSpeed = Math.hypot(vel.x, vel.z);
+
+    // Skid: yanking the stick the other way at speed plants the feet first.
+    if (prevSpeed > 6.5 && skidCooldown <= 0 && tx * vel.x + tz * vel.z < -0.35 * prevSpeed * max) {
+      player.play("skid");
+      skidCooldown = 0.9;
+      dust.emit(pos.x, pos.z, 8);
+      audio.skid();
+    }
+    skidCooldown = Math.max(0, skidCooldown - dt);
     const accel = Math.hypot(tx, tz) > 0.01 ? 9 : 7;
     vel.x = damp(vel.x, tx, accel, dt);
     vel.z = damp(vel.z, tz, accel, dt);
@@ -683,8 +752,27 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
     }
     player.root.position.copy(pos);
     player.root.rotation.y = yaw;
-    player.update(dt, Math.min(1, speed / SPRINT) * (speed > 0.15 ? 1 : 0), time);
-    if (speed > WALK + 1 && Math.random() < dt * 14) dust.emit(pos.x, pos.z);
+    // Pose context: bank into turns, lean with acceleration, glance at the
+    // nearest ball, crouch over it when dribbling.
+    let lookAt: number | null = null;
+    let nearest = Infinity;
+    let atFeet = 0;
+    for (const b of balls) {
+      const dx = b.pos.x - pos.x;
+      const dz = b.pos.z - pos.z;
+      const dd = Math.hypot(dx, dz);
+      if (dd < 9 && dd < nearest) {
+        nearest = dd;
+        lookAt = angleDelta(yaw, Math.atan2(dx, dz));
+      }
+      if (dd < 1.6 && speed > 1) atFeet = 1;
+    }
+    player.update(dt, Math.min(1, speed / SPRINT) * (speed > 0.15 ? 1 : 0), time, 0, {
+      turn: angleDelta(prevYaw, yaw) / Math.max(dt, 1e-3),
+      accel: (speed - prevSpeed) / Math.max(dt, 1e-3),
+      look: lookAt,
+      dribble: atFeet,
+    });
 
     if (!started) {
       waveClock -= dt;
@@ -713,7 +801,7 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
       ring.set(0);
     }
     wasHeld = kickHeld;
-    ring.mesh.position.set(pos.x, 0.04, pos.z);
+    ring.mesh.position.set(pos.x, 0.3, pos.z);
 
     /* ---------------------------------------------------------- keeper */
     const tb = balls[4];
@@ -745,7 +833,9 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
 
       // dribbling: running into the ball carries it just ahead of you
       if (b.pos.y < 1.1 && b.resetIn < 0) {
-        const n = penetration(b.pos.x, b.pos.z, b.r, circle(pos.x, pos.z, PLAYER_R, 2));
+        playerBody.x = pos.x;
+        playerBody.z = pos.z;
+        const n = penetration(b.pos.x, b.pos.z, b.r, playerBody);
         if (n) {
           b.pos.x += n.x * n.depth;
           b.pos.z += n.z * n.depth;
@@ -785,10 +875,11 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
           b.cooldown = 2;
           const id = idsOf("trophies").find((t) => !unlocked.has(t));
           config.onEvent({ type: "goal", zone: "trophies" });
+          world.bulgeNet(1, Math.min(1.4, b.vel.length() / 14));
           slowMo = 0.9;
           if (id) reveal(id, b.pos.clone());
           else {
-            player.play("celebrate");
+            player.celebrate();
             confetti.burst(b.pos.x, 1, b.pos.z, 90);
             audio.cheer(true);
           }
@@ -798,6 +889,7 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
           b.resetIn = 1.6;
           b.cooldown = 2;
           config.onEvent({ type: "goal", zone: "about" });
+          world.bulgeNet(-1, Math.min(1.4, b.vel.length() / 14));
           slowMo = 0.9;
           reveal(idsOf("about")[0] ?? "about", b.pos.clone());
         }
@@ -850,7 +942,7 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
     if (pinEvent === "strike") {
       audio.cheer(true);
       confetti.burst(PINS.x + 1, 1, PINS.z, 120);
-      player.play("celebrate");
+      player.celebrate();
       world.uniforms.uCheer.value = 1;
       cheerHold = 0.8;
       config.onEvent({ type: "strike" });
@@ -864,6 +956,20 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
         audio.collect(orbStep++);
         gsap.to(o.group.scale, { x: 0, y: 0, z: 0, duration: 0.45, ease: "back.in(2)", onComplete: () => void (o.group.visible = false) });
         reveal(o.id, o.group.position.clone());
+      }
+    }
+
+    /* ----------------------------------------------------------- stars */
+    for (let i = 0; i < world.stars.length; i++) {
+      const st = world.stars[i];
+      if (st.taken || !started) continue;
+      if (Math.hypot(pos.x - st.x, pos.z - st.z) < 1.3) {
+        st.taken = true;
+        const count = world.stars.filter((x) => x.taken).length;
+        audio.collect(count + 3);
+        confetti.burst(st.x, 1.2, st.z, 40, 0.6);
+        gsap.to(st.group.scale, { x: 0, y: 0, z: 0, duration: 0.35, ease: "back.in(2)", onComplete: () => void (st.group.visible = false) });
+        config.onEvent({ type: "star", index: i, count, total: world.stars.length });
       }
     }
 
@@ -885,7 +991,7 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
       const arrowMat = arrow.material as THREE.MeshBasicMaterial;
       arrowMat.opacity = damp(arrowMat.opacity, d > 9 && !paused ? 0.85 : 0, 5, dt);
       const ang = Math.atan2(anchor.x - pos.x, anchor.z - pos.z);
-      arrow.position.set(pos.x + Math.sin(ang) * 1.6, 0.05, pos.z + Math.cos(ang) * 1.6);
+      arrow.position.set(pos.x + Math.sin(ang) * 1.6, 0.32, pos.z + Math.cos(ang) * 1.6);
       // shape points +Y; laid flat it points −Z, so turn it half a revolution further
       arrow.rotation.set(-Math.PI / 2, ang + Math.PI, 0);
     } else {
@@ -914,6 +1020,14 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
     snapShadow(pos.x, pos.z);
     updateCamera(dt);
 
+    // grass: follows the player, parts round feet and rolling balls
+    grass.update(time, pos.x, pos.z);
+    grass.setPusher(0, pos.x, pos.z, 0.95, 0.35 + Math.min(1, speed / 4) * 0.65);
+    balls.forEach((b, i) => {
+      const rolling = b.grounded ? Math.min(1, 0.4 + Math.hypot(b.vel.x, b.vel.z) / 6) : 0;
+      grass.setPusher(i + 1, b.pos.x, b.pos.z, 0.75, rolling);
+    });
+
     if (started && !paused) playTime += dt;
     nearHold = Math.max(0, nearHold - dt);
   }
@@ -940,19 +1054,174 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
   let disposed = false;
   // Async compile needs KHR_parallel_shader_compile; without it, compile up
   // front synchronously (no warning, same result).
-  const compiled = renderer.extensions.has("KHR_parallel_shader_compile")
-    ? renderer.compileAsync(scene, camera).catch(() => undefined)
-    : Promise.resolve(renderer.compile(scene, camera));
-  compiled.then(() => !disposed && renderer.setAnimationLoop(frame));
+  compileInPieces()
+    .then(warmUp)
+    .catch(() => !disposed && renderer.setAnimationLoop(frame));
+
+  /**
+   * Compile shaders one scene branch at a time, yielding in between, so a
+   * slow GPU driver never freezes the page in one long block. With
+   * KHR_parallel_shader_compile the driver works in the background anyway.
+   */
+  async function compileInPieces() {
+    performance.mark("rvs:compile-start");
+    if (renderer.extensions.has("KHR_parallel_shader_compile")) {
+      await renderer.compileAsync(scene, camera).catch(() => undefined);
+    } else {
+      for (const child of [...scene.children]) {
+        if (disposed) return;
+        renderer.compile(child, camera, scene);
+        await breathe();
+      }
+    }
+    performance.measure("rvs:compile", "rvs:compile-start");
+  }
+
+  /**
+   * Everything a first visit would otherwise pay for on screen — and a return
+   * visit gets free from the browser's caches — happens here, behind the
+   * loader: SMAA's lookup images decode, every texture uploads, and a few full
+   * frames compile the shadow and post-processing shaders. Only then does the
+   * loader lift, so the first frame anyone sees is a settled one.
+   */
+  async function warmUp() {
+    performance.mark("rvs:warmup-start");
+
+    // SMAA decodes two lookup images asynchronously; until they land its
+    // edge blending reads empty textures and the image shimmers.
+    if (composer) {
+      const luts = smaa as unknown as { _areaTexture: THREE.Texture; _searchTexture: THREE.Texture };
+      await Promise.all(
+        [luts._areaTexture, luts._searchTexture].map(async (t) => {
+          const img = t.image as HTMLImageElement;
+          await img.decode().catch(() => undefined);
+          t.needsUpdate = true;
+        }),
+      );
+    }
+    if (disposed) return;
+
+    // Upload every texture now, not the first time its object scrolls into
+    // view — a few at a time, so the uploads never stack into one freeze.
+    const seen = new Set<THREE.Texture>();
+    scene.traverse((o) => {
+      const mats = (o as THREE.Mesh).material;
+      if (!mats) return;
+      for (const m of Array.isArray(mats) ? mats : [mats]) {
+        for (const v of Object.values(m)) if (v instanceof THREE.Texture) seen.add(v);
+      }
+    });
+    let n = 0;
+    for (const t of seen) {
+      renderer.initTexture(t);
+      if (++n % 6 === 0) await breathe();
+      if (disposed) return;
+    }
+    config.onProgress?.(0.94, "Warming up");
+
+    // A few real frames: shadow-map shaders, bloom/SMAA programs and render
+    // targets all get built here. Then check the post chain actually draws.
+    for (let i = 0; i < 4; i++) {
+      if (disposed) return;
+      updateCamera(0);
+      snapShadow(pos.x, pos.z);
+      render();
+      await breathe();
+    }
+    if (composer) {
+      composer.render();
+      if (composerLooksBroken()) dropComposer();
+    }
+    if (disposed) return;
+
+    performance.measure("rvs:warmup", "rvs:warmup-start");
+    performance.mark("rvs:quality-start");
+    await autoQuality();
+    performance.measure("rvs:quality", "rvs:quality-start");
+    if (disposed) return;
+    timer.update();
+    renderer.setAnimationLoop(frame);
+  }
+
+  /**
+   * Auto quality, measured rather than guessed: time real frames of the
+   * heaviest view (the whole stadium, from the title orbit) and step down only
+   * as far as needed for 60 fps. Fast GPUs step *up* to full sharpness.
+   */
+  let quality = "high";
+  async function autoQuality() {
+    const gl = renderer.getContext();
+    const px = new Uint8Array(4);
+    const bench = async () => {
+      const times: number[] = [];
+      for (let i = 0; i < 4; i++) {
+        const t0 = performance.now();
+        render();
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); // wait for the GPU
+        times.push(performance.now() - t0);
+        await breathe();
+      }
+      times.sort((a, b) => a - b);
+      return times[1];
+    };
+    const setDpr = (v: number) => {
+      dpr = v;
+      renderer.setPixelRatio(v);
+      resize();
+    };
+
+    let ms = await bench();
+    if (ms < 6 && dpr < Math.min(2, window.devicePixelRatio || 1)) {
+      setDpr(Math.min(2, window.devicePixelRatio || 1));
+      if ((await bench()) > 11) setDpr(Math.max(1, dpr - 0.5));
+      return;
+    }
+    if (ms > 13 && dpr > 1) {
+      setDpr(Math.max(1, dpr - 0.5));
+      quality = "balanced";
+      ms = await bench();
+    }
+    if (ms > 13) {
+      grass.setDensity(0.5);
+      ms = await bench();
+    }
+    if (ms > 15 && composer) {
+      dropComposer();
+      quality = "fast";
+      ms = await bench();
+    }
+    if (ms > 17) {
+      world.sun.shadow.mapSize.set(1024, 1024);
+      world.sun.shadow.map?.dispose();
+      world.sun.shadow.map = null;
+      grass.setDensity(0.3);
+      quality = "lite";
+    }
+  }
 
   /** Leave the title screen: whistle, crowd, and the camera swoops down to the player. */
   function startMatch() {
     if (started) return;
     started = true;
     audio.unlock();
-    audio.whistle();
-    audio.cheer(false);
     introT = 0;
+  }
+
+  /** Countdown cues from the HUD: pips, then the whistle and the roar. */
+  function cue(kind: "beep" | "go") {
+    if (disposed) return; // a late countdown beat after leaving the page
+    audio.unlock();
+    if (kind === "beep") {
+      audio.beep();
+      return;
+    }
+    audio.beep(true);
+    audio.whistle();
+    audio.cheer(true);
+    world.uniforms.uCheer.value = 1;
+    cheerHold = 1.4;
+    confetti.burst(pos.x, 2.5, pos.z - 1, 150, 1.4);
+    player.celebrate();
   }
 
   if (process.env.NODE_ENV === "development") {
@@ -970,6 +1239,9 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
       },
       get paused() {
         return paused;
+      },
+      get quality() {
+        return { tier: quality, dpr, post: !!composer };
       },
       /** Is the bloom + SMAA pipeline active (or did the self-test fall back)? */
       get postProcessing() {
@@ -995,6 +1267,7 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
     playTime: 0,
     keeperZ: 0,
     balls: balls.map(() => ({ x: 0, z: 0 })),
+    stars: world.stars.map((st) => ({ x: st.x, z: st.z, taken: st.taken })),
     started: false,
     paused: true,
   };
@@ -1018,6 +1291,7 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
       snap.balls[i].x = b.pos.x;
       snap.balls[i].z = b.pos.z;
     });
+    world.stars.forEach((st, i) => (snap.stars[i].taken = st.taken));
     snap.started = started;
     snap.paused = paused;
     return snap;
@@ -1026,6 +1300,11 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
   /* ============================================================ public API */
   return {
     start: startMatch,
+    cue,
+    /** A little reaction from the avatar (title-screen fun). */
+    emote(name: "fistpump" | "airplane" | "wave" | "bounce") {
+      if (!started && !player.busy) player.play(name);
+    },
     snapshot,
     resume() {
       if (!started) return;
@@ -1057,6 +1336,7 @@ export function createGame(canvas: HTMLCanvasElement, config: GameConfig) {
       renderer.setAnimationLoop(null);
       composer?.dispose();
       pins.dispose();
+      grass.dispose();
       trails.dispose();
       ro.disconnect();
       window.removeEventListener("keydown", onKeyDown);

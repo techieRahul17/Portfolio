@@ -29,8 +29,11 @@ export function SkillGlobe({ items, className }: { items: string[]; className?: 
         return { x: Math.cos(golden * i) * r, y, z: Math.sin(golden * i) * r };
       });
 
-      let radius = el.clientWidth * 0.4;
-      const ro = new ResizeObserver(() => (radius = el.clientWidth * 0.4));
+      // Leave room for the widest label at the rim, so none ever spill past
+      // the globe's box (and off the page when the globe sits at an edge).
+      const fit = () => Math.max(60, el.clientWidth / 2 - 78);
+      let radius = fit();
+      const ro = new ResizeObserver(() => (radius = fit()));
       ro.observe(el);
 
       // Rotation as two angles plus angular velocity (radians / second).

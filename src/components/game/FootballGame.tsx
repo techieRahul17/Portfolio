@@ -17,8 +17,19 @@ import { Journal, itemName } from "./Journal";
 import { Joystick } from "./Joystick";
 import { PauseMenu } from "./PauseMenu";
 import { RevealPanel } from "./RevealPanel";
+import { Countdown } from "./Countdown";
 
 const MUTE_KEY = "rvs:game:muted";
+const STARS_KEY = "rvs:game:stars";
+
+function loadStars(): number[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(STARS_KEY) ?? "[]");
+    return Array.isArray(v) ? v.filter((n) => Number.isInteger(n)) : [];
+  } catch {
+    return [];
+  }
+}
 
 /**
  * The portfolio as a football match. Three.js draws the pitch; everything you
@@ -47,6 +58,8 @@ export function FootballGame({ projects }: { projects: Project[] }) {
   const [banner, setBanner] = useState<Banner | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
   const [fullTimeReady, setFullTimeReady] = useState(false);
+  const [stars, setStars] = useState({ count: 0, total: 10 });
+  const [count, setCount] = useState<{ text: string; key: number } | null>(null);
   const [finalMinutes, setFinalMinutes] = useState(0);
   const unlockedRef = useRef<Set<string>>(new Set());
 
@@ -72,6 +85,20 @@ export function FootballGame({ projects }: { projects: Project[] }) {
         setBanner({ kind: "bullseye", key, minute: minute() });
       } else if (e.type === "strike") {
         setBanner({ kind: "strike", key, minute: minute() });
+      } else if (e.type === "star") {
+        setStars({ count: e.count, total: e.total });
+        try {
+          const got = new Set(loadStars()).add(e.index);
+          localStorage.setItem(STARS_KEY, JSON.stringify([...got]));
+        } catch {
+          /* private mode — stars just won't persist */
+        }
+        if (e.count === e.total) setBanner({ kind: "stars", key, minute: minute() });
+        else {
+          const note = { key, title: `Golden star ${e.count} of ${e.total}`, zone: "star" };
+          setNotes((n) => [...n.slice(-2), note]);
+          setTimeout(() => setNotes((n) => n.filter((x) => x.key !== key)), 2400);
+        }
       } else if (e.type === "unlock" && e.fresh) {
         const zone = zones.find((z) => z.ids.includes(e.id))?.id ?? "";
         const note = { key, title: itemName(e.id, projects), zone };
@@ -107,18 +134,22 @@ export function FootballGame({ projects }: { projects: Project[] }) {
     const fonts = (document.fonts?.ready ?? Promise.resolve()).then(() => step(0.25, "Lacing up number 17"));
     const engine = import("@/lib/game/engine").then((m) => (step(0.5, "Mowing the pitch"), m));
 
+    const savedStars = loadStars();
+
     Promise.all([fonts, engine])
-      .then(([, { createGame }]) => {
+      .then(async ([, { createGame }]) => {
         if (cancelled || !canvas.current) return;
         unlockedRef.current = new Set(saved);
         setUnlocked(new Set(saved));
         setMuted(startMuted);
-        instance = createGame(canvas.current, {
+        setStars((s) => ({ ...s, count: savedStars.length }));
+        const built = await createGame(canvas.current, {
           zones,
           gateLabels,
           projects: projects.map((p) => ({ id: ids.project(p.slug), title: p.title })),
           skills: skills.map((s, i) => ({ id: ids.skill(i), title: s.title })),
           unlocked: saved,
+          stars: savedStars,
           touch: isTouch,
           onProgress: step,
           onReady: () => !cancelled && setReady(true),
@@ -136,6 +167,12 @@ export function FootballGame({ projects }: { projects: Project[] }) {
           },
           onEvent: (e) => onEventRef.current(e),
         });
+        // Unmounted while the stadium was still being built: tear it down.
+        if (cancelled) {
+          built.dispose();
+          return;
+        }
+        instance = built;
         instance.setMuted(startMuted);
         game.current = instance;
       })
@@ -154,7 +191,8 @@ export function FootballGame({ projects }: { projects: Project[] }) {
   const kickOff = useCallback(() => {
     if (!game.current) return;
     (document.activeElement as HTMLElement | null)?.blur();
-    game.current.start();
+    const g = game.current;
+    g.start();
     gsap.to(bootRef.current, {
       autoAlpha: 0,
       scale: 1.03,
@@ -162,6 +200,20 @@ export function FootballGame({ projects }: { projects: Project[] }) {
       ease: "power2.inOut",
       onComplete: () => setPhase("play"),
     });
+    // 3 · 2 · 1 · KICK OFF, in time with the camera swooping down.
+    const beats: [number, string][] = [
+      [0.35, "3"],
+      [0.9, "2"],
+      [1.45, "1"],
+      [2.0, "KICK OFF"],
+    ];
+    beats.forEach(([at, text]) =>
+      setTimeout(() => {
+        setCount({ text, key: performance.now() });
+        g.cue(text === "KICK OFF" ? "go" : "beep");
+      }, at * 1000),
+    );
+    setTimeout(() => setCount(null), 3000);
   }, []);
 
   const closePanel = useCallback(() => {
@@ -236,13 +288,8 @@ export function FootballGame({ projects }: { projects: Project[] }) {
   /* Keyboard: Esc backs out of whatever is open, else opens the menu. */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (phase === "boot") {
-        if (ready && (e.code === "Enter" || e.code === "Space")) {
-          e.preventDefault();
-          kickOff();
-        }
-        return;
-      }
+      // The boot screen handles its own keys (Space juggles, Enter proceeds).
+      if (phase === "boot") return;
       if (e.code === "Escape") {
         if (open) closePanel();
         else if (journal) closeJournal();
@@ -268,7 +315,7 @@ export function FootballGame({ projects }: { projects: Project[] }) {
 
   /* ------------------------------------------------------------- render */
   return (
-    <div className="bg-bg fixed inset-0 overflow-hidden select-none" data-lenis-prevent>
+    <div data-game-root className="bg-bg fixed inset-0 overflow-hidden select-none" data-lenis-prevent>
       <canvas ref={canvas} aria-hidden className="absolute inset-0 h-full w-full touch-none outline-none" />
 
       {/* lens vignette */}
@@ -285,6 +332,7 @@ export function FootballGame({ projects }: { projects: Project[] }) {
             zones={zones}
             unlocked={unlocked}
             score={score}
+            stars={stars}
             muted={muted}
             touch={touch}
             onMute={toggleMute}
@@ -302,6 +350,7 @@ export function FootballGame({ projects }: { projects: Project[] }) {
       )}
 
       <BannerSweep banner={banner} />
+      {count && <Countdown key={count.key} text={count.text} />}
       <Notes notes={notes} />
 
       {phase === "boot" && (
@@ -317,6 +366,7 @@ export function FootballGame({ projects }: { projects: Project[] }) {
             touch={touch}
             onMute={toggleMute}
             onStart={kickOff}
+            onHover={() => game.current?.emote("fistpump")}
           />
         </div>
       )}
