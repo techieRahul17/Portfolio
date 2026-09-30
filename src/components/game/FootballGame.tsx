@@ -18,6 +18,10 @@ import { Joystick } from "./Joystick";
 import { PauseMenu } from "./PauseMenu";
 import { RevealPanel } from "./RevealPanel";
 import { Countdown } from "./Countdown";
+import { MissionComplete, type MissionResult } from "./MissionComplete";
+import { MedalIcon } from "./icons";
+import { clearProgressExtras, loadAchievements, loadMedals, matchRating, recordMedal, saveAchievements, type Medals } from "./progress";
+import { ACHIEVEMENTS, CHALLENGES, type AchievementId, type ChallengeId } from "@/lib/game/challenges";
 
 const MUTE_KEY = "rvs:game:muted";
 const STARS_KEY = "rvs:game:stars";
@@ -50,7 +54,9 @@ export function FootballGame({ projects }: { projects: Project[] }) {
   const [boot, setBoot] = useState({ progress: 0.05, label: "Warming up" });
   const [failed, setFailed] = useState(false);
   const [unlocked, setUnlocked] = useState<Set<string>>(() => new Set());
-  const [open, setOpen] = useState<{ id: string; fresh: boolean } | null>(null);
+  /** Unlock cards waiting to be read, oldest first. */
+  const [queue, setQueue] = useState<{ id: string; fresh: boolean }[]>([]);
+  const open = queue[0] ?? null;
   const [journal, setJournal] = useState(false);
   const [menu, setMenu] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -62,6 +68,11 @@ export function FootballGame({ projects }: { projects: Project[] }) {
   const [count, setCount] = useState<{ text: string; key: number } | null>(null);
   const [finalMinutes, setFinalMinutes] = useState(0);
   const unlockedRef = useRef<Set<string>>(new Set());
+  const [medals, setMedals] = useState<Medals>({});
+  const medalsRef = useRef<Medals>({});
+  const [achieved, setAchieved] = useState<AchievementId[]>([]);
+  const achievedRef = useRef<Set<AchievementId>>(new Set());
+  const [mission, setMission] = useState<MissionResult | null>(null);
 
   /* The game owns the viewport: no page scroll, no smooth-scroll engine. */
   useEffect(() => {
@@ -71,6 +82,24 @@ export function FootballGame({ projects }: { projects: Project[] }) {
 
   /* ------------------------------------------------------------ events */
   const minute = () => Math.floor((game.current?.snapshot().playTime ?? 0) / 60) + 1;
+
+  const note = useCallback((title: string, zone: string, ms = 3000) => {
+    const key = performance.now() + Math.random();
+    setNotes((n) => [...n.slice(-2), { key, title, zone }]);
+    setTimeout(() => setNotes((n) => n.filter((x) => x.key !== key)), ms);
+  }, []);
+
+  const achieve = useCallback(
+    (id: AchievementId) => {
+      if (achievedRef.current.has(id)) return;
+      achievedRef.current.add(id);
+      saveAchievements(achievedRef.current);
+      setAchieved([...achievedRef.current]);
+      const a = ACHIEVEMENTS.find((x) => x.id === id);
+      if (a) note(`Achievement · ${a.title}`, "achievement", 3600);
+    },
+    [note],
+  );
 
   const onEvent = useCallback(
     (e: GameEvent) => {
@@ -101,12 +130,22 @@ export function FootballGame({ projects }: { projects: Project[] }) {
         }
       } else if (e.type === "unlock" && e.fresh) {
         const zone = zones.find((z) => z.ids.includes(e.id))?.id ?? "";
-        const note = { key, title: itemName(e.id, projects), zone };
-        setNotes((n) => [...n.slice(-2), note]);
-        setTimeout(() => setNotes((n) => n.filter((x) => x.key !== key)), 3200);
+        note(itemName(e.id, projects), zone, 3200);
+      } else if (e.type === "challenge") {
+        const r = recordMedal(medalsRef.current, e.id, e.medal);
+        medalsRef.current = r.medals;
+        setMedals(r.medals);
+        setMission({ key, id: e.id, medal: e.medal, value: e.value, improved: r.improved, first: r.first });
+        setTimeout(() => setMission((m) => (m?.key === key ? null : m)), 2700);
+        const all = Object.keys(CHALLENGES) as ChallengeId[];
+        if (all.every((id) => r.medals[id] === "gold")) achieve("perfectionist");
+      } else if (e.type === "achievement") {
+        achieve(e.id);
+      } else if (e.type === "crossbar") {
+        setBanner({ kind: "crossbar", key, minute: minute() });
       }
     },
-    [zones, projects],
+    [zones, projects, note, achieve],
   );
 
   // The engine is built once; it reaches the latest handler through this ref.
@@ -135,6 +174,8 @@ export function FootballGame({ projects }: { projects: Project[] }) {
     const engine = import("@/lib/game/engine").then((m) => (step(0.5, "Mowing the pitch"), m));
 
     const savedStars = loadStars();
+    const savedMedals = loadMedals();
+    const savedAch = loadAchievements();
 
     Promise.all([fonts, engine])
       .then(async ([, { createGame }]) => {
@@ -143,6 +184,10 @@ export function FootballGame({ projects }: { projects: Project[] }) {
         setUnlocked(new Set(saved));
         setMuted(startMuted);
         setStars((s) => ({ ...s, count: savedStars.length }));
+        medalsRef.current = savedMedals;
+        setMedals(savedMedals);
+        achievedRef.current = new Set(savedAch);
+        setAchieved(savedAch);
         const built = await createGame(canvas.current, {
           zones,
           gateLabels,
@@ -150,6 +195,7 @@ export function FootballGame({ projects }: { projects: Project[] }) {
           skills: skills.map((s, i) => ({ id: ids.skill(i), title: s.title })),
           unlocked: saved,
           stars: savedStars,
+          achieved: savedAch,
           touch: isTouch,
           onProgress: step,
           onReady: () => !cancelled && setReady(true),
@@ -159,7 +205,7 @@ export function FootballGame({ projects }: { projects: Project[] }) {
             unlockedRef.current = next;
             saveProgress(next);
             setUnlocked(next);
-            setOpen({ id, fresh });
+            setQueue((q) => (q.some((x) => x.id === id) ? q : [...q, { id, fresh }]));
             if (completes) {
               setFinalMinutes(Math.floor((instance?.snapshot().playTime ?? 0) / 60));
               setFullTimeReady(true);
@@ -216,10 +262,17 @@ export function FootballGame({ projects }: { projects: Project[] }) {
     setTimeout(() => setCount(null), 3000);
   }, []);
 
+  const queueRef = useRef(queue);
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
+
+  /** Close the card on top; the game resumes only when none are left. */
   const closePanel = useCallback(() => {
-    setOpen(null);
+    const rest = queueRef.current.slice(1);
+    setQueue(rest);
     (document.activeElement as HTMLElement | null)?.blur();
-    game.current?.resume();
+    if (rest.length === 0) game.current?.resume();
   }, []);
 
   const openJournal = useCallback(() => {
@@ -267,12 +320,13 @@ export function FootballGame({ projects }: { projects: Project[] }) {
 
   const resetProgress = useCallback(() => {
     saveProgress([]);
+    clearProgressExtras();
     window.location.reload();
   }, []);
 
   const openFromJournal = (id: string) => {
     setJournal(false);
-    setOpen({ id, fresh: false });
+    setQueue([{ id, fresh: false }]);
   };
 
   /* Full time: shown once the final unlock's card has been closed. */
@@ -333,6 +387,7 @@ export function FootballGame({ projects }: { projects: Project[] }) {
             unlocked={unlocked}
             score={score}
             stars={stars}
+            medals={medals}
             muted={muted}
             touch={touch}
             onMute={toggleMute}
@@ -350,6 +405,7 @@ export function FootballGame({ projects }: { projects: Project[] }) {
       )}
 
       <BannerSweep banner={banner} />
+      {mission && <MissionComplete key={mission.key} result={mission} />}
       {count && <Countdown key={count.key} text={count.text} />}
       <Notes notes={notes} />
 
@@ -367,6 +423,8 @@ export function FootballGame({ projects }: { projects: Project[] }) {
             onMute={toggleMute}
             onStart={kickOff}
             onHover={() => game.current?.emote("fistpump")}
+            medals={medals}
+            onJuggle={(n) => n >= 10 && achieve("juggler")}
           />
         </div>
       )}
@@ -378,7 +436,16 @@ export function FootballGame({ projects }: { projects: Project[] }) {
       )}
 
       {journal && (
-        <Journal zones={zones} unlocked={unlocked} projects={projects} onOpen={openFromJournal} onClose={closeJournal} onUnlockAll={unlockAll} />
+        <Journal
+          zones={zones}
+          unlocked={unlocked}
+          projects={projects}
+          medals={medals}
+          achieved={achieved}
+          onOpen={openFromJournal}
+          onClose={closeJournal}
+          onUnlockAll={unlockAll}
+        />
       )}
 
       {menu && (
@@ -386,7 +453,7 @@ export function FootballGame({ projects }: { projects: Project[] }) {
       )}
 
       {fullTime && (
-        <div className="absolute inset-0 z-50 grid place-items-center bg-[rgba(7,7,10,0.72)] p-5 backdrop-blur-md">
+        <div className="absolute inset-0 z-50 grid place-items-center bg-[rgba(7,7,10,0.86)] p-5">
           <div className="max-w-xl text-center">
             <p className={`${mono} text-accent text-[0.65rem]`}>Full time</p>
             <div className="mx-auto mt-5 flex w-fit items-stretch overflow-hidden rounded-xl border border-white/10">
@@ -401,9 +468,23 @@ export function FootballGame({ projects }: { projects: Project[] }) {
               <br />
               <span className="text-accent">whole squad.</span>
             </h2>
+            <div className="mx-auto mt-6 flex w-fit items-center gap-6">
+              <div className="text-left">
+                <p className={`${mono} text-faint text-[0.55rem]`}>Match rating</p>
+                <p className="font-display text-accent text-5xl leading-none tabular-nums">
+                  {matchRating(medals, achieved.length, stars.count).toFixed(1)}
+                </p>
+              </div>
+              <div className="flex gap-1.5">
+                {(Object.keys(CHALLENGES) as ChallengeId[]).map((id) => (
+                  <MedalIcon key={id} medal={medals[id] ?? "none"} className="h-10 w-8" />
+                ))}
+              </div>
+            </div>
             <p className="text-muted mx-auto mt-5 max-w-md leading-relaxed">
-              {allIds.length} of {allIds.length} unlocked{finalMinutes > 0 ? ` in ${finalMinutes} minutes` : ""}. If you enjoyed the match, I&apos;d
-              love to build something like it with you.
+              {allIds.length} of {allIds.length} unlocked{finalMinutes > 0 ? ` in ${finalMinutes} minutes` : ""}, {achieved.length} of{" "}
+              {ACHIEVEMENTS.length} achievements, {stars.count} of {stars.total} stars. Go back for gold on every mission — or, if you
+              enjoyed the match, let&apos;s build something like it together.
             </p>
             <div className="mt-8 flex flex-wrap justify-center gap-3">
               <Link href="/contact" className="bg-accent text-accent-ink rounded-full px-6 py-3.5 text-sm font-semibold">

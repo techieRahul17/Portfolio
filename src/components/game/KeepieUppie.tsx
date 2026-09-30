@@ -32,10 +32,13 @@ const DROPS = [
 export function KeepieUppie({
   muted,
   onStreakChange,
+  onCount,
 }: {
   muted: boolean;
   /** Reports whether the player is mid-juggle, so loading waits for them. */
   onStreakChange?: (juggling: boolean) => void;
+  /** Called with the streak after every touch (for the Juggler achievement). */
+  onCount?: (count: number) => void;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [streak, setStreak] = useState(0);
@@ -45,11 +48,13 @@ export function KeepieUppie({
   const [quip, setQuip] = useState("Tap the ball. Keep it up while the stadium loads.");
   const mutedRef = useRef(muted);
   const cb = useRef(onStreakChange);
+  const countCb = useRef(onCount);
 
   useEffect(() => {
     mutedRef.current = muted;
     cb.current = onStreakChange;
-  }, [muted, onStreakChange]);
+    countCb.current = onCount;
+  }, [muted, onStreakChange, onCount]);
 
   useEffect(() => {
     const canvas = ref.current!;
@@ -122,6 +127,7 @@ export function KeepieUppie({
       const line = QUIPS.filter(([n]) => n <= count).pop();
       if (line && line[0] === count) setQuip(line[1]);
       cb.current?.(true);
+      countCb.current?.(count);
       thump(Math.min(1, count / 10));
       for (let i = 0; i < 8; i++) {
         const a = Math.PI + Math.random() * Math.PI;

@@ -7,7 +7,9 @@ import { ArrowUpRight, BookOpen, Menu, Star, Volume2, VolumeX } from "lucide-rea
 import { profile } from "@/data/profile";
 import type { Game, ZoneDef } from "@/lib/game/engine";
 import { ZONE_ANCHORS } from "@/lib/game/layout";
-import { Key, LiveDot, NeedleIcon } from "./icons";
+import { Key, LiveDot, MedalIcon, NeedleIcon } from "./icons";
+import { CHALLENGES, targetsLine, type ChallengeId } from "@/lib/game/challenges";
+import type { Medals } from "./progress";
 import { Minimap } from "./Minimap";
 
 export const mono = "font-mono tracking-[0.2em] uppercase";
@@ -25,6 +27,7 @@ export function Hud({
   unlocked,
   score,
   stars,
+  medals,
   muted,
   touch,
   onMute,
@@ -36,6 +39,7 @@ export function Hud({
   unlocked: Set<string>;
   score: { goals: number; saves: number };
   stars: { count: number; total: number };
+  medals: Medals;
   muted: boolean;
   touch: boolean;
   onMute: () => void;
@@ -46,6 +50,8 @@ export function Hud({
   const powerRef = useRef<HTMLDivElement>(null);
   const needleRef = useRef<HTMLDivElement>(null);
   const distRef = useRef<HTMLSpanElement>(null);
+  const challengeRef = useRef<HTMLSpanElement>(null);
+  const [brief, setBrief] = useState<{ id: ChallengeId; key: number } | null>(null);
   const [live, setLive] = useState({ zone: null as string | null, next: null as string | null, near: false, charging: false });
   const [idle, setIdle] = useState(false);
 
@@ -53,6 +59,7 @@ export function Hud({
     let raf = 0;
     let prev = live;
     let wentIdle = false;
+    const briefed = new Set<string>();
     const loop = () => {
       raf = requestAnimationFrame(loop);
       const g = game.current;
@@ -67,7 +74,15 @@ export function Hud({
         needleRef.current.style.transform = `rotate(${bearing}rad)`;
         distRef.current.textContent = `${Math.round(s.nextDist)} m`;
       }
+      if (challengeRef.current) challengeRef.current.textContent = s.challenge?.text ?? "";
       const charging = s.charge > 0;
+      // First time into a mission zone this match: the briefing card.
+      if (s.zone && s.zone !== prev.zone && s.zone in CHALLENGES && !briefed.has(s.zone)) {
+        briefed.add(s.zone);
+        const key = performance.now();
+        setBrief({ id: s.zone as ChallengeId, key });
+        setTimeout(() => setBrief((b) => (b?.key === key ? null : b)), 5200);
+      }
       if (s.zone !== prev.zone || s.next !== prev.next || s.near !== prev.near || charging !== prev.charging) {
         prev = { zone: s.zone, next: s.next, near: s.near, charging };
         setLive(prev);
@@ -89,6 +104,8 @@ export function Hud({
   const mission = here ?? zones[nextIndex];
   const missionGot = mission ? mission.ids.filter((id) => unlocked.has(id)).length : 0;
   const missionDone = mission ? missionGot === mission.ids.length : false;
+  const challengeId = here && here.id in CHALLENGES ? (here.id as ChallengeId) : null;
+  const best = challengeId ? medals[challengeId] : undefined;
 
   const ring = 2 * Math.PI * 21;
 
@@ -157,7 +174,7 @@ export function Hud({
               <span ref={clockRef}>00:00</span>
             </div>
           </div>
-          <p className={`${mono} text-muted bg-bg/70 mx-auto mt-1.5 flex w-fit items-center gap-2 rounded-full px-3 py-1 text-[0.55rem] backdrop-blur-sm`}>
+          <p className={`${mono} text-muted bg-bg/90 mx-auto mt-1.5 flex w-fit items-center gap-2 rounded-full px-3 py-1 text-[0.55rem]`}>
             <LiveDot /> Live · The portfolio match
           </p>
         </div>
@@ -202,8 +219,24 @@ export function Hud({
             <div className="px-4 pt-3 pb-4">
               <p className="font-display text-lg leading-tight">{mission.name}</p>
               <p className="text-muted mt-1 text-xs leading-relaxed">
-                {missionDone ? "All unlocked. Follow the light to the next mission." : mission.task}
+                {missionDone
+                  ? challengeId && best !== "gold"
+                    ? "All unlocked. Go again for a better medal."
+                    : "All unlocked. Follow the light to the next mission."
+                  : mission.task}
               </p>
+              {challengeId && (
+                <div className="border-line mt-3 rounded-xl border px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className={`${mono} text-accent text-[0.55rem]`}>Challenge · {CHALLENGES[challengeId].title}</p>
+                    <MedalIcon medal={best ?? "none"} className="h-5 w-4" />
+                  </div>
+                  <p className="font-display mt-1 text-base leading-tight tabular-nums">
+                    <span ref={challengeRef} />
+                  </p>
+                  <p className="text-faint mt-1 text-[0.65rem]">{targetsLine(challengeId)}</p>
+                </div>
+              )}
               <div className="mt-3 flex gap-1">
                 {mission.ids.map((id) => (
                   <span
@@ -216,6 +249,23 @@ export function Hud({
                 {missionGot}/{mission.ids.length} unlocked
               </p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------------------------------------- mission briefing */}
+      {brief && (
+        <div className="absolute inset-x-0 top-28 flex justify-center px-4 md:top-32">
+          <div key={brief.key} className="panel w-[min(26rem,100%)] animate-[fadeUp_0.5s_var(--ease-out)] rounded-2xl p-5 text-center">
+            <p className={`${mono} text-accent text-[0.55rem]`}>Mission briefing</p>
+            <p className="font-display mt-1.5 text-2xl leading-tight tracking-[-0.02em]">{CHALLENGES[brief.id].title}</p>
+            <p className="text-muted mt-2 text-sm leading-relaxed">{CHALLENGES[brief.id].brief}</p>
+            <div className="mt-3 flex items-center justify-center gap-3">
+              <MedalIcon medal="gold" className="h-6 w-5" />
+              <MedalIcon medal="silver" className="h-6 w-5" />
+              <MedalIcon medal="bronze" className="h-6 w-5" />
+            </div>
+            <p className="text-faint mt-2 text-xs">{targetsLine(brief.id)}</p>
           </div>
         </div>
       )}

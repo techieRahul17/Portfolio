@@ -6,7 +6,9 @@ import { ArrowRight, Check, Volume2, VolumeX } from "lucide-react";
 import { gsap, useGSAP } from "@/lib/gsap";
 import { profile } from "@/data/profile";
 import type { ZoneDef } from "@/lib/game/engine";
-import { BallIcon, Key } from "./icons";
+import { BallIcon, Key, MedalIcon } from "./icons";
+import { CHALLENGES, type ChallengeId } from "@/lib/game/challenges";
+import type { Medals } from "./progress";
 import { mono } from "./Hud";
 import { KeepieUppie } from "./KeepieUppie";
 
@@ -49,6 +51,8 @@ export function GameBoot({
   onMute,
   onStart,
   onHover,
+  medals,
+  onJuggle,
 }: {
   progress: number;
   label: string;
@@ -62,6 +66,8 @@ export function GameBoot({
   onStart: () => void;
   /** The avatar reacts when you eye up the Kick off button. */
   onHover?: () => void;
+  medals: Medals;
+  onJuggle?: (count: number) => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const ballRef = useRef<HTMLDivElement>(null);
@@ -241,7 +247,10 @@ export function GameBoot({
                         {done ? <Check className="h-3.5 w-3.5" /> : i + 1}
                       </span>
                       <span className={done ? "text-muted line-through decoration-1" : "text-fg"}>{z.name}</span>
-                      <span className="text-faint ml-auto font-mono text-[0.6rem]">
+                      {z.id in CHALLENGES && (
+                        <MedalIcon medal={medals[z.id as ChallengeId] ?? "none"} className="ml-auto h-5 w-4" />
+                      )}
+                      <span className={`text-faint font-mono text-[0.6rem] ${z.id in CHALLENGES ? "" : "ml-auto"}`}>
                         {zg}/{z.ids.length}
                       </span>
                     </li>
@@ -286,7 +295,7 @@ export function GameBoot({
           </p>
 
           <div className="mt-8">
-            <KeepieUppie muted={muted} onStreakChange={setJuggling} />
+            <KeepieUppie muted={muted} onStreakChange={setJuggling} onCount={onJuggle} />
           </div>
 
           {/* progress: a little pitch, the ball dribbling to goal */}

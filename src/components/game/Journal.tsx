@@ -8,7 +8,10 @@ import { achievements } from "@/data/achievements";
 import { skills } from "@/data/skills";
 import type { ZoneDef } from "@/lib/game/engine";
 import type { Project } from "@/types";
-import { resolve } from "./content";
+import { gateLabels, resolve } from "./content";
+import { MedalIcon } from "./icons";
+import type { Medals } from "./progress";
+import { ACHIEVEMENTS, CHALLENGES, targetsLine, type AchievementId, type ChallengeId } from "@/lib/game/challenges";
 import { mono } from "./Hud";
 
 export function itemName(id: string, projects: Project[]) {
@@ -18,7 +21,8 @@ export function itemName(id: string, projects: Project[]) {
     case "about":
       return "Who I am";
     case "xp":
-      return `${r.item.role} · ${r.item.company.split(" ")[0]}`;
+      // Short names match the gates on the pitch ("Amazon", "SSN").
+      return `${r.item.role} · ${gateLabels[r.index] ?? r.item.company}`;
     case "project":
       return r.project.title;
     case "skill":
@@ -38,6 +42,8 @@ export function Journal({
   onOpen,
   onClose,
   onUnlockAll,
+  medals,
+  achieved,
 }: {
   zones: ZoneDef[];
   unlocked: Set<string>;
@@ -45,6 +51,8 @@ export function Journal({
   onOpen: (id: string) => void;
   onClose: () => void;
   onUnlockAll: () => void;
+  medals: Medals;
+  achieved: AchievementId[];
 }) {
   const root = useRef<HTMLDivElement>(null);
   useGSAP(
@@ -59,7 +67,7 @@ export function Journal({
   const got = zones.reduce((n, z) => n + z.ids.filter((id) => unlocked.has(id)).length, 0);
 
   return (
-    <div ref={root} className="absolute inset-0 z-40 flex bg-[rgba(7,7,10,0.55)] backdrop-blur-sm" onClick={onClose}>
+    <div ref={root} className="absolute inset-0 z-40 flex bg-[rgba(7,7,10,0.72)]" onClick={onClose}>
       <aside
         data-jr-panel
         role="dialog"
@@ -97,6 +105,14 @@ export function Journal({
                 <div className="flex items-center gap-3">
                   <span className="text-faint font-mono text-[0.6rem]">0{i + 1}</span>
                   <h3 className="font-display text-base">{z.name}</h3>
+                  {z.id in CHALLENGES && (
+                    <span
+                      className="flex items-center gap-1"
+                      title={`${CHALLENGES[z.id as ChallengeId].title} — ${targetsLine(z.id as ChallengeId)}`}
+                    >
+                      <MedalIcon medal={medals[z.id as ChallengeId] ?? "none"} className="h-5 w-4" />
+                    </span>
+                  )}
                   <span className={`ml-auto font-mono text-[0.6rem] ${zg === z.ids.length ? "text-accent" : "text-faint"}`}>
                     {zg}/{z.ids.length}
                   </span>
@@ -127,6 +143,29 @@ export function Journal({
               </section>
             );
           })}
+
+          <section data-jr-zone className="border-line mt-2 border-t pt-6">
+            <div className="flex items-center gap-3">
+              <h3 className="font-display text-base">Achievements</h3>
+              <span className="text-faint ml-auto font-mono text-[0.6rem]">
+                {achieved.length}/{ACHIEVEMENTS.length}
+              </span>
+            </div>
+            <ul className="mt-3 grid grid-cols-2 gap-2">
+              {ACHIEVEMENTS.map((a) => {
+                const has = achieved.includes(a.id);
+                return (
+                  <li
+                    key={a.id}
+                    className={`rounded-xl border px-3 py-2.5 ${has ? "border-accent/40 bg-accent/5" : "border-line"}`}
+                  >
+                    <p className={`text-sm leading-tight ${has ? "text-fg" : "text-faint"}`}>{a.title}</p>
+                    <p className="text-faint mt-1 text-[0.7rem] leading-snug">{has ? a.detail : "Locked — keep playing"}</p>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
         </div>
 
         <footer className="border-line flex flex-wrap items-center gap-3 border-t px-6 py-4">

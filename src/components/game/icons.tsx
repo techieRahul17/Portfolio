@@ -42,3 +42,28 @@ export function Key({ children, wide = false }: { children: React.ReactNode; wid
     </kbd>
   );
 }
+
+const MEDAL_COLORS = {
+  gold: ["#ffd24a", "#b8860b"],
+  silver: ["#e3e8f2", "#8a93a6"],
+  bronze: ["#e0975a", "#8a4f24"],
+  none: ["#2b2b38", "#1c1c25"],
+} as const;
+
+/** A medal on a ribbon. `none` draws an empty slot for unearned medals. */
+export function MedalIcon({ medal, className = "h-6 w-6" }: { medal: "gold" | "silver" | "bronze" | "none"; className?: string }) {
+  const [face, rim] = MEDAL_COLORS[medal];
+  return (
+    <svg viewBox="0 0 32 40" aria-hidden className={className}>
+      {medal !== "none" && (
+        <>
+          <path d="M9 1h6l3 12h-6Z" fill="#6e5bff" />
+          <path d="M23 1h-6l-3 12h6Z" fill="#e8ff4f" />
+        </>
+      )}
+      <circle cx="16" cy="25" r="12" fill={rim} />
+      <circle cx="16" cy="25" r="9.5" fill={face} />
+      {medal !== "none" && <path d="m16 19.5 1.7 3.5 3.8.5-2.8 2.6.7 3.8-3.4-1.8-3.4 1.8.7-3.8-2.8-2.6 3.8-.5Z" fill={rim} opacity="0.85" />}
+    </svg>
+  );
+}

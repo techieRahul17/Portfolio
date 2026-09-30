@@ -14,6 +14,7 @@ import { createGrass } from "./grass";
 import { Ball, circle, penetration, type Collider } from "./physics";
 import { footballTexture, toonRamp } from "./textures";
 import { buildWorld } from "./world";
+import { medalFor, type AchievementId, type ChallengeId, type Medal } from "./challenges";
 
 export type ZoneDef = { id: string; name: string; task: string; ids: string[] };
 
@@ -25,6 +26,8 @@ export type GameConfig = {
   unlocked: string[];
   /** Indices of golden stars already collected (restored from storage). */
   stars?: number[];
+  /** Achievements already earned (so they aren't announced twice). */
+  achieved?: string[];
   touch: boolean;
   onReady: () => void;
   onProgress?: (progress: number, label: string) => void;
@@ -39,7 +42,10 @@ export type GameEvent =
   | { type: "bullseye" }
   | { type: "unlock"; id: string; fresh: boolean }
   | { type: "strike" }
-  | { type: "star"; index: number; count: number; total: number };
+  | { type: "star"; index: number; count: number; total: number }
+  | { type: "challenge"; id: ChallengeId; value: number; medal: Medal }
+  | { type: "achievement"; id: AchievementId }
+  | { type: "crossbar" };
 
 /** Live state the HUD polls each frame (minimap, prompts, mission tracker). */
 export type Snapshot = {
@@ -62,6 +68,10 @@ export type Snapshot = {
   stars: { x: number; z: number; taken: boolean }[];
   started: boolean;
   paused: boolean;
+  /** Live readout for the mission being attempted, e.g. "2.4s · gate 1/3". */
+  challenge: { id: ChallengeId; text: string } | null;
+  /** Metres run this match. */
+  distance: number;
 };
 
 export type Game = Awaited<ReturnType<typeof createGame>>;
@@ -255,6 +265,7 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
   trails.points.renderOrder = 6;
   scene.add(trails.points);
   const prevX = new Map(balls.map((b) => [b, b.pos.x]));
+  const expBall = balls.find((b) => b.zone === "experience")!;
   const prevVX = new Map(balls.map((b) => [b, 0]));
 
   /* ============================================================ guidance */
@@ -313,8 +324,10 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
       const id = idsOf("experience")[i];
       if (id && unlocked.has(id)) markGate(i);
     });
+    // Skills finished in an earlier visit: leave the orbs out for time trials.
+    const skillsDone = idsOf("skills").every((id) => unlocked.has(id));
     world.orbs.forEach((o) => {
-      if (unlocked.has(o.id) && !o.taken) {
+      if (!skillsDone && unlocked.has(o.id) && !o.taken) {
         o.taken = true;
         o.group.visible = false;
       }
@@ -396,10 +409,10 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
 
   /* ================================================================ reveal */
   let celebrateCam = 0;
-  function reveal(id: string, at?: THREE.Vector3) {
-    const fresh = !unlocked.has(id);
+  function reveal(id: string, at?: THREE.Vector3, announced = false) {
+    const fresh = announced || !unlocked.has(id);
     unlocked.add(id);
-    config.onEvent({ type: "unlock", id, fresh });
+    if (!announced) config.onEvent({ type: "unlock", id, fresh });
     player.celebrate();
     if (at) confetti.burst(at.x, at.y + 0.5, at.z, fresh ? 170 : 60);
     if (fresh) {
@@ -413,6 +426,59 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
     pendingReveals.push({ id, fresh, t: fresh ? 1.45 : 0.35 });
   }
 
+  /* ============================================================ challenges */
+  // Mastery layer: every mission is also a scored challenge with a medal.
+  let aboutShots = 0;
+  let expRun: { start: number; next: number } | null = null;
+  const workRun = { shots: 0, hits: new Set<number>() };
+  let orbRun: number | null = null;
+  const shootOut = { goals: 0, saves: 0, streak: 0 };
+  let distance = 0;
+  const kickFrom = new Map<Ball, { x: number; z: number }>();
+  const achieved = new Set(config.achieved ?? []);
+  /** Unlock cards held back while a timed run is in progress. */
+  const deferred: { id: string; at: THREE.Vector3 }[] = [];
+
+  function award(id: ChallengeId, value: number) {
+    config.onEvent({ type: "challenge", id, value, medal: medalFor(id, value) });
+    audio.fanfare();
+    // Let the medal have its moment before any unlock card slides in.
+    for (const r of pendingReveals) r.t = Math.max(r.t, 2.4);
+  }
+
+  function achieve(id: AchievementId) {
+    if (achieved.has(id)) return;
+    achieved.add(id);
+    config.onEvent({ type: "achievement", id });
+  }
+
+  /** Release the cards held back during a timed run. */
+  function flushDeferred() {
+    for (const d of deferred.splice(0)) reveal(d.id, d.at, true);
+  }
+
+  function challengeText(): { id: ChallengeId; text: string } | null {
+    if (!started) return null;
+    if (expRun) return { id: "experience", text: `${(playTime - expRun.start).toFixed(1)}s · gate ${expRun.next}/3` };
+    if (orbRun !== null) {
+      const got = world.orbs.filter((o) => o.taken).length;
+      return { id: "skills", text: `${(playTime - orbRun).toFixed(1)}s · ${got}/${world.orbs.length} orbs` };
+    }
+    switch (snap.zone) {
+      case "about":
+        return { id: "about", text: `${aboutShots} ${aboutShots === 1 ? "shot" : "shots"} taken` };
+      case "work":
+        return { id: "work", text: `${workRun.hits.size}/4 hit · ${workRun.shots} ${workRun.shots === 1 ? "shot" : "shots"}` };
+      case "trophies":
+        return { id: "trophies", text: `${shootOut.goals}/4 goals · ${shootOut.saves} saved` };
+      case "experience":
+        return { id: "experience", text: "Clock starts on your first touch" };
+      case "skills":
+        return { id: "skills", text: "Clock starts on the first orb" };
+    }
+    return null;
+  }
+
   /* All timing runs on the simulation clock (not wall-clock tweens), so the
      game pauses cleanly and can be stepped deterministically. */
   const pendingReveals: { id: string; fresh: boolean; t: number }[] = [];
@@ -422,15 +488,23 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
   let introT = -1;
 
   function tickTimers(dt: number) {
-    for (let i = pendingReveals.length - 1; i >= 0; i--) {
-      const r = pendingReveals[i];
-      r.t -= dt;
-      if (r.t > 0) continue;
-      pendingReveals.splice(i, 1);
+    // Oldest first, so queued cards open in the order they were earned.
+    for (const r of pendingReveals) r.t -= dt;
+    while (pendingReveals.length && pendingReveals[0].t <= 0) {
+      const r = pendingReveals.shift()!;
       paused = true;
       keys.clear();
       kickHeld = false;
       config.onReveal(r.id, r.fresh);
+    }
+    // A later card may be due before an earlier one; release any that are.
+    for (let i = 0; i < pendingReveals.length; ) {
+      const r = pendingReveals[i];
+      if (r.t <= 0) {
+        pendingReveals.splice(i, 1);
+        paused = true;
+        config.onReveal(r.id, r.fresh);
+      } else i++;
     }
 
     if (cheerHold > 0) cheerHold -= dt;
@@ -529,6 +603,9 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
     const v = aim(target, power);
     target.vel.set(v.vx, v.vy, v.vz);
     target.cooldown = 0;
+    kickFrom.set(target, { x: target.pos.x, z: target.pos.z });
+    if (target.zone === "about") aboutShots++;
+    if (target.zone === "work") workRun.shots++;
     audio.kick(power);
     dust.emit(target.pos.x, target.pos.z, 6);
     shake = 0.12 + power * 0.25;
@@ -669,6 +746,7 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
   let slow = 0;
   let frames = 0;
   let orbStep = 0;
+  let orbRespawn = 0;
   let waveClock = 1.5;
   // THREE.Clock is deprecated in r186; Timer also zeroes delta while the tab is hidden.
   const timer = new THREE.Timer();
@@ -865,6 +943,42 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
       // lost balls come home
       if (Math.abs(b.pos.x) > 58 || Math.abs(b.pos.z) > 44 || b.pos.y < -2) b.reset();
 
+      // The crossbar is a real bar: the ball rings off it.
+      if (Math.abs(b.pos.z) < GOAL.halfWidth + 0.1) {
+        for (const side of [-1, 1]) {
+          const dx = b.pos.x - side * GOAL.lineX;
+          const dy = b.pos.y - GOAL.height;
+          const d = Math.hypot(dx, dy);
+          const min = b.r + 0.12;
+          if (d >= min || d < 1e-4) continue;
+          const nx = dx / d;
+          const ny = dy / d;
+          b.pos.x = side * GOAL.lineX + nx * min;
+          b.pos.y = GOAL.height + ny * min;
+          const vn = b.vel.x * nx + b.vel.y * ny;
+          if (vn < 0) {
+            b.vel.x -= 1.6 * vn * nx;
+            b.vel.y -= 1.6 * vn * ny;
+            if (-vn > 3) {
+              audio.ding();
+              shake = 0.2;
+              config.onEvent({ type: "crossbar" });
+              achieve("crossbar");
+            }
+          }
+        }
+      }
+
+      // Slalom clock: starts the moment the ball leaves its spot.
+      if (b === expBall && !expRun && b.resetIn < 0) {
+        const fromHome = Math.hypot(b.pos.x - b.home.x, b.pos.z - b.home.z);
+        if (fromHome > 0.4 && fromHome < 3 && Math.hypot(b.vel.x, b.vel.z) > 1) expRun = { start: playTime, next: 0 };
+      }
+      if (b === expBall && expRun && (b.resetIn > 0 || playTime - expRun.start > 40)) {
+        expRun = null;
+        flushDeferred();
+      }
+
       if (b.cooldown <= 0 && b.resetIn < 0) {
         const hw = GOAL.halfWidth;
         const underBar = b.pos.y < GOAL.height && Math.abs(b.pos.z) < hw;
@@ -875,6 +989,11 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
           b.cooldown = 2;
           const id = idsOf("trophies").find((t) => !unlocked.has(t));
           config.onEvent({ type: "goal", zone: "trophies" });
+          if (b === tb) {
+            shootOut.goals++;
+            shootOut.streak++;
+            if (shootOut.streak >= 3) achieve("hattrick");
+          }
           world.bulgeNet(1, Math.min(1.4, b.vel.length() / 14));
           slowMo = 0.9;
           if (id) reveal(id, b.pos.clone());
@@ -882,6 +1001,11 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
             player.celebrate();
             confetti.burst(b.pos.x, 1, b.pos.z, 90);
             audio.cheer(true);
+          }
+          if (b === tb && shootOut.goals >= 4) {
+            award("trophies", shootOut.saves);
+            shootOut.goals = 0;
+            shootOut.saves = 0;
           }
         }
         /* west goal — about */
@@ -891,12 +1015,25 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
           config.onEvent({ type: "goal", zone: "about" });
           world.bulgeNet(-1, Math.min(1.4, b.vel.length() / 14));
           slowMo = 0.9;
-          reveal(idsOf("about")[0] ?? "about", b.pos.clone());
+          const aboutId = idsOf("about")[0] ?? "about";
+          // First goal opens the card; after that it's pure celebration.
+          if (!unlocked.has(aboutId)) reveal(aboutId, b.pos.clone());
+          else {
+            player.celebrate();
+            confetti.burst(b.pos.x, 1, b.pos.z, 110);
+            audio.cheer(true);
+          }
+          if (b.zone === "about") {
+            award("about", Math.max(1, aboutShots));
+            aboutShots = 0;
+          }
         }
 
         /* keeper save */
         if (b === tb && (prevVX.get(b) ?? 0) > 5 && b.vel.x < 0 && b.pos.x > 42) {
           config.onEvent({ type: "save" });
+          shootOut.saves++;
+          shootOut.streak = 0;
           audio.groan();
           b.resetIn = 1.4;
           b.cooldown = 1.5;
@@ -907,10 +1044,37 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
         world.gates.forEach((g, i) => {
           if (px > g.x && b.pos.x <= g.x && Math.abs(b.pos.z - EXPERIENCE.z) < EXPERIENCE.halfWidth && b.pos.y < 1.5) {
             const id = idsOf("experience")[i];
+            const at = new THREE.Vector3(g.x, 0.5, EXPERIENCE.z);
             markGate(i);
-            if (id) {
-              audio.collect(i);
-              reveal(id, new THREE.Vector3(g.x, 0.5, EXPERIENCE.z));
+            audio.collect(i);
+            confetti.burst(g.x, 0.6, EXPERIENCE.z, 30, 0.5);
+
+            // the slalom: gates in order, on the clock
+            if (b === expBall && expRun) {
+              if (i === expRun.next) expRun.next++;
+              else {
+                expRun = null;
+                flushDeferred();
+              }
+            }
+
+            if (id && !unlocked.has(id)) {
+              if (expRun && b === expBall) {
+                // mid-run: announce now, open the card when the run ends
+                unlocked.add(id);
+                config.onEvent({ type: "unlock", id, fresh: true });
+                deferred.push({ id, at });
+              } else reveal(id, at);
+            }
+
+            if (b === expBall && expRun && expRun.next === 3) {
+              const time = playTime - expRun.start;
+              expRun = null;
+              player.celebrate();
+              audio.cheer(true);
+              flushDeferred();
+              award("experience", time);
+              b.resetIn = 2.2; // back on the spot for another go
             }
           }
         });
@@ -926,7 +1090,21 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
               t.pulse = 1;
               world.markTarget(t, i);
               config.onEvent({ type: "bullseye" });
-              reveal(t.id, new THREE.Vector3(t.x, t.y, face + 0.5));
+              const from = kickFrom.get(b);
+              if (from && Math.hypot(from.x - t.x, from.z - face) >= 20) achieve("sniper");
+              if (!unlocked.has(t.id)) reveal(t.id, new THREE.Vector3(t.x, t.y, face + 0.5));
+              else {
+                player.celebrate();
+                confetti.burst(t.x, t.y, face + 0.5, 70);
+              }
+              if (b.zone === "work") {
+                workRun.hits.add(i);
+                if (workRun.hits.size === world.targets.length) {
+                  award("work", workRun.shots);
+                  workRun.shots = 0;
+                  workRun.hits.clear();
+                }
+              }
             }
           });
         }
@@ -946,6 +1124,7 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
       world.uniforms.uCheer.value = 1;
       cheerHold = 0.8;
       config.onEvent({ type: "strike" });
+      achieve("strike");
     }
 
     /* ------------------------------------------------------------ orbs */
@@ -955,8 +1134,41 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
         o.taken = true;
         audio.collect(orbStep++);
         gsap.to(o.group.scale, { x: 0, y: 0, z: 0, duration: 0.45, ease: "back.in(2)", onComplete: () => void (o.group.visible = false) });
-        reveal(o.id, o.group.position.clone());
+        confetti.burst(o.x, 1.3, o.z, 35, 0.6);
+        // the rush clock starts on the first orb of a full set
+        if (orbRun === null && world.orbs.every((x) => x === o || !x.taken)) orbRun = playTime;
+        if (!unlocked.has(o.id)) {
+          if (orbRun !== null) {
+            unlocked.add(o.id);
+            config.onEvent({ type: "unlock", id: o.id, fresh: true });
+            deferred.push({ id: o.id, at: o.group.position.clone() });
+          } else reveal(o.id, o.group.position.clone());
+        }
+        if (world.orbs.every((x) => x.taken)) {
+          const time = orbRun !== null ? playTime - orbRun : null;
+          orbRun = null;
+          player.celebrate();
+          audio.cheer(true);
+          flushDeferred();
+          if (time !== null) award("skills", time);
+          orbRespawn = 6; // put them back out for another run
+        }
       }
+    }
+
+    if (orbRespawn > 0) {
+      orbRespawn -= dt;
+      if (orbRespawn <= 0) {
+        for (const o of world.orbs) {
+          o.taken = false;
+          o.group.visible = true;
+          gsap.fromTo(o.group.scale, { x: 0, y: 0, z: 0 }, { x: 1, y: 1, z: 1, duration: 0.6, ease: "back.out(2)" });
+        }
+      }
+    }
+    if (orbRun !== null && playTime - orbRun > 90) {
+      orbRun = null;
+      flushDeferred();
     }
 
     /* ----------------------------------------------------------- stars */
@@ -970,6 +1182,7 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
         confetti.burst(st.x, 1.2, st.z, 40, 0.6);
         gsap.to(st.group.scale, { x: 0, y: 0, z: 0, duration: 0.35, ease: "back.in(2)", onComplete: () => void (st.group.visible = false) });
         config.onEvent({ type: "star", index: i, count, total: world.stars.length });
+        if (count === world.stars.length) achieve("goldenboot");
       }
     }
 
@@ -1028,7 +1241,11 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
       grass.setPusher(i + 1, b.pos.x, b.pos.z, 0.75, rolling);
     });
 
-    if (started && !paused) playTime += dt;
+    if (started && !paused) {
+      playTime += dt;
+      distance += speed * dt;
+      if (distance >= 500) achieve("marathon");
+    }
     nearHold = Math.max(0, nearHold - dt);
   }
 
@@ -1270,6 +1487,8 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
     stars: world.stars.map((st) => ({ x: st.x, z: st.z, taken: st.taken })),
     started: false,
     paused: true,
+    challenge: null,
+    distance: 0,
   };
 
   /** Cheap to call every frame: fills and returns one shared object. */
@@ -1294,6 +1513,8 @@ export async function createGame(canvas: HTMLCanvasElement, config: GameConfig) 
     world.stars.forEach((st, i) => (snap.stars[i].taken = st.taken));
     snap.started = started;
     snap.paused = paused;
+    snap.challenge = challengeText();
+    snap.distance = distance;
     return snap;
   }
 

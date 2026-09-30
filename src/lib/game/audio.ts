@@ -156,6 +156,16 @@ export function createAudio() {
       tone(base, 0.18, 0.18, "triangle");
       tone(base * 1.5, 0.25, 0.14, "triangle", undefined, 0.08);
     },
+    /** The crossbar: a bright metallic ring. */
+    ding() {
+      tone(1560, 0.9, 0.12, "triangle");
+      tone(2340, 0.6, 0.06, "sine");
+      tone(3120, 0.35, 0.03, "sine");
+    },
+    /** Medal awarded: a short rising fanfare. */
+    fanfare() {
+      [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, i === 4 ? 0.6 : 0.2, 0.13, "square", undefined, i * 0.09));
+    },
     unlockChime() {
       [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.35, 0.12, "triangle", undefined, i * 0.07));
     },

@@ -54,7 +54,7 @@ export function PauseMenu({
     "group flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-sm outline-none transition-colors hover:bg-white/5 focus-visible:bg-accent focus-visible:text-accent-ink focus:bg-accent focus:text-accent-ink";
 
   return (
-    <div ref={root} className="absolute inset-0 z-50 grid place-items-center bg-[rgba(7,7,10,0.6)] p-4 backdrop-blur-md">
+    <div ref={root} className="absolute inset-0 z-50 grid place-items-center bg-[rgba(7,7,10,0.8)] p-4">
       <div data-pm-card role="dialog" aria-label="Paused" className="panel w-full max-w-sm overflow-hidden rounded-3xl">
         <div className="border-line flex items-baseline justify-between border-b px-6 py-5">
           <p className="font-display text-3xl tracking-[-0.03em]">{view === "controls" ? "Controls" : view === "reset" ? "Reset?" : "Paused"}</p>
